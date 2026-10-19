@@ -74,8 +74,22 @@ func demoBacktest() *pb.Backtest {
 	}
 }
 
-func drain(ch <-chan *servicePb.RunExecutionResponse) {
-	for range ch {
+// drainTimeout bounds a run. A mock that refuses a call in the runner goroutine
+// exits that goroutine without closing the channel, so an unbounded drain hangs.
+const drainTimeout = 5 * time.Second
+
+func drain(t *testing.T, ch <-chan *servicePb.RunExecutionResponse) {
+	t.Helper()
+	deadline := time.After(drainTimeout)
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("run did not finish: the runner stopped without closing its channel")
+		}
 	}
 }
 
@@ -121,7 +135,7 @@ func TestRunBacktestProcessReceivesMembersAtT(t *testing.T) {
 
 	ch, err := session.RunBacktest(context.Background(), &pb.Execution{Backtest: "sp100"}, pool)
 	require.NoError(t, err)
-	drain(ch)
+	drain(t, ch)
 }
 
 func TestRunBacktestEmptyUniversePassesEmptySymbols(t *testing.T) {
@@ -149,7 +163,7 @@ func TestRunBacktestEmptyUniversePassesEmptySymbols(t *testing.T) {
 
 	ch, err := session.RunBacktest(context.Background(), &pb.Execution{Backtest: "sp100"}, pool)
 	require.NoError(t, err)
-	drain(ch)
+	drain(t, ch)
 }
 
 func TestMemberSymbolsAtEmptyInputs(t *testing.T) {
@@ -183,7 +197,7 @@ func TestRunBacktestSendsStoredBenchmark(t *testing.T) {
 
 	ch, err := session.RunBacktest(context.Background(), &pb.Execution{Backtest: "demo"}, pool)
 	require.NoError(t, err)
-	drain(ch)
+	drain(t, ch)
 }
 
 func TestRunBacktestSymbolListPassesEnabledPeriodAssets(t *testing.T) {
@@ -214,7 +228,7 @@ func TestRunBacktestSymbolListPassesEnabledPeriodAssets(t *testing.T) {
 
 	ch, err := session.RunBacktest(context.Background(), &pb.Execution{Backtest: "demo"}, pool)
 	require.NoError(t, err)
-	drain(ch)
+	drain(t, ch)
 }
 
 func TestRunBacktestRefusesUnreadableBacktest(t *testing.T) {
