@@ -98,7 +98,9 @@ def test_misaligned_bundle_triggers_rebuild_even_with_a_marker(tmp_path):
 
 
 def test_missing_bundle_fails_before_a_run(tmp_path):
-    with pytest.raises(ValueError, match="create the backtest before running it"):
+    with pytest.raises(
+        ValueError, match="No data for backtest 'missing_bundle': create the backtest before running it\\."
+    ):
         ensure_session_aligned_bundle("missing_bundle", {"ZIPLINE_ROOT": str(tmp_path)})
 
 

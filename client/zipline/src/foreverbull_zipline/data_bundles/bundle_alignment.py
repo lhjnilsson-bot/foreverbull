@@ -204,7 +204,7 @@ def ensure_session_aligned_bundle(
     creates since the alignment fix, before this stamp) is only stamped.
     """
     if latest_ingest_dir(bundle_name, environ=environ) is None:
-        raise ValueError(f"no data for bundle {bundle_name!r}: create the backtest before running it")
+        raise ValueError(f"No data for backtest {bundle_name!r}: create the backtest before running it.")
     misaligned = bundle_dates_misaligned(bundle_name, environ=environ)
     if not misaligned:
         if bundle_version(bundle_name, environ=environ) < SESSION_ALIGNED_BUNDLE_VERSION:
