@@ -1,3 +1,4 @@
+from datetime import UTC
 from datetime import date
 from datetime import datetime
 
@@ -7,6 +8,7 @@ from foreverbull_zipline.data_bundles.foreverbull import SQLIngester
 from foreverbull_zipline.data_bundles.foreverbull import bundle_provider
 from foreverbull_zipline.data_bundles.foreverbull import group_symbols_by_instrument
 from foreverbull_zipline.data_bundles.foreverbull import membership_auto_close_date
+from foreverbull_zipline.data_bundles.foreverbull import session_labels
 
 from foreverbull.models.finance import DEFAULT_PROVIDER
 from foreverbull.models.finance import ohlc_provider
@@ -27,6 +29,20 @@ def _bars(symbol: str, days: list[date], price: float) -> pd.DataFrame:
             "close": [price] * len(days),
             "volume": [100] * len(days),
             "time": [datetime(d.year, d.month, d.day) for d in days],
+        }
+    )
+
+
+def _bars_at_open(days: list[date], price: float) -> pd.DataFrame:
+    # Yahoo stamps a daily bar at the 09:30 ET session open, 14:30 UTC.
+    return pd.DataFrame(
+        {
+            "open": [price] * len(days),
+            "high": [price] * len(days),
+            "low": [price] * len(days),
+            "close": [price] * len(days),
+            "volume": [100] * len(days),
+            "time": [datetime(d.year, d.month, d.day, 14, 30, tzinfo=UTC) for d in days],
         }
     )
 
@@ -174,3 +190,39 @@ def test_sql_ingester_sets_auto_close_when_no_membership_table():
     assert bool(metadata["auto_close_date"].notna().all())
     aapl = metadata.loc[metadata["symbol"] == "AAPL"].iloc[0]
     assert pd.Timestamp(aapl["auto_close_date"]) == pd.Timestamp("2023-03-01")
+
+
+def test_session_labels_drop_the_session_open_time():
+    labels = session_labels(["2023-01-03T14:30:00Z", "2023-01-04T14:30:00Z"])
+    assert list(labels) == [pd.Timestamp("2023-01-03"), pd.Timestamp("2023-01-04")]
+    assert list(session_labels(["2023-01-03", "2023-01-04"])) == [
+        pd.Timestamp("2023-01-03"),
+        pd.Timestamp("2023-01-04"),
+    ]
+
+
+def test_sql_ingester_aligns_bars_to_the_first_session():
+    # The benchmark (OEF) and every asset start on 2023-01-03, stamped at
+    # 14:30 UTC. Their Zipline start must be that session's label, or
+    # Zipline refuses the benchmark as not yet trading on 2023-01-03.
+    days = [date(2023, 1, 3), date(2023, 1, 4)]
+    engine = FakeEngine(
+        {
+            "FB": _bars_at_open(days, 10.0),
+            "AAPL": _bars_at_open(days, 12.0),
+            "META": _bars_at_open(days, 11.0),
+            "OEF": _bars_at_open(days, 13.0),
+        }
+    )
+    ingester = SQLIngester(_backtest(), engine=engine, aliases=pd.DataFrame())
+    ingester._df_metadata = ingester.create_metadata()
+    ingested = list(ingester.writer(False))
+    metadata = pd.DataFrame(ingester._df_metadata)
+
+    first_session = pd.Timestamp("2023-01-03")
+    for _, frame in ingested:
+        assert list(frame.index) == [first_session, pd.Timestamp("2023-01-04")]
+    assert set(metadata["start_date"].tolist()) == {first_session}
+    assert set(metadata["end_date"].tolist()) == {pd.Timestamp("2023-01-04")}
+    benchmark_rows = metadata.loc[metadata["symbol"] == "OEF"]
+    assert pd.Timestamp(benchmark_rows["start_date"].iloc[0]) == first_session

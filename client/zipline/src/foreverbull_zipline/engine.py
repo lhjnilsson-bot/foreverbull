@@ -1,6 +1,7 @@
 import functools
 import logging
 import logging.handlers
+import math
 import multiprocessing
 import multiprocessing.queues
 import os
@@ -11,6 +12,7 @@ import six
 
 from protobuf import merge_from_binary
 from zipline.data import bundles
+from zipline.data.bar_reader import NoDataOnDate
 from zipline.data.data_portal import DataPortal
 from zipline.extensions import load
 from zipline.finance import metrics
@@ -35,6 +37,59 @@ class ConfigError(Exception):
 
 class StopExcecution(Exception):
     pass
+
+
+def zero_benchmark_returns(sessions: pd.DatetimeIndex) -> pd.Series:
+    """Flat benchmark on the simulation sessions, not on calendar dates."""
+    return pd.Series(index=sessions, data=0.0)
+
+
+def benchmark_returns(window_sessions, sessions, opens, closes) -> pd.Series:
+    """Benchmark daily returns on Zipline session labels.
+
+    ``window_sessions`` may hold the session before ``sessions`` so the
+    first return is that close against the previous close. Without a
+    usable previous close the first return is the first session's open
+    to close, as Zipline does for an asset that starts on that session.
+    Passing the benchmark as a sid instead lets Zipline compare the
+    asset start (the first bar, stamped at the session open) against
+    the session label and refuse the run, so the series is built here.
+    """
+    session_index = pd.DatetimeIndex(sessions)
+    if len(session_index) == 0:
+        return zero_benchmark_returns(session_index)
+    window_index = pd.DatetimeIndex(window_sessions)
+    close_series = pd.Series(data=[float(value) for value in closes], index=window_index, dtype=float)
+    open_series = pd.Series(data=[float(value) for value in opens], index=window_index, dtype=float)
+    returns = close_series.pct_change().reindex(session_index)
+    first_return = float(returns.iloc[0])
+    if not math.isfinite(first_return):
+        first_open = float(open_series[session_index[0]])
+        first_close = float(close_series[session_index[0]])
+        returns.iloc[0] = (first_close - first_open) / first_open if first_open > 0 else 0.0
+    returns = returns.fillna(0.0)
+    return returns.replace([float("inf"), float("-inf")], 0.0)
+
+
+def load_benchmark_returns(bundle, benchmark_asset, trading_calendar, sessions) -> pd.Series:
+    """Read the benchmark's daily bars from the bundle on session labels."""
+    if len(sessions) == 0:
+        return zero_benchmark_returns(sessions)
+    reader = bundle.equity_daily_bar_reader
+    window_start = sessions[0]
+    if sessions[0] > trading_calendar.first_session:
+        window_start = trading_calendar.previous_session(sessions[0])
+    window_sessions = trading_calendar.sessions_in_range(window_start, sessions[-1])
+    if len(window_sessions) == 0 or window_sessions[0] > sessions[0]:
+        window_sessions = sessions
+    try:
+        opens, closes = reader.load_raw_arrays(
+            ["open", "close"], window_sessions[0], window_sessions[-1], [benchmark_asset]
+        )
+    except NoDataOnDate:
+        opens, closes = reader.load_raw_arrays(["open", "close"], sessions[0], sessions[-1], [benchmark_asset])
+        window_sessions = sessions
+    return benchmark_returns(window_sessions, sessions, opens[:, 0], closes[:, 0])
 
 
 class Engine(multiprocessing.Process):
@@ -185,14 +240,16 @@ class Engine(multiprocessing.Process):
             end.day,
         )
 
-        if req.benchmark:
-            benchmark_returns = None
-            benchmark_sid = bundle.asset_finder.lookup_symbol(req.benchmark, as_of_date=None)
-        else:
-            benchmark_returns = pd.Series(index=pd.date_range(start_date, end_date, tz="utc"), data=0.0)
-            benchmark_sid = None
-
         trading_calendar = get_calendar("XNYS")
+        sessions = trading_calendar.sessions_in_range(start_date, end_date)  # type: ignore[arg-type]
+
+        benchmark_sid = None
+        if req.benchmark:
+            benchmark_asset = bundle.asset_finder.lookup_symbol(req.benchmark, as_of_date=None)
+            stored_benchmark_returns = load_benchmark_returns(bundle, benchmark_asset, trading_calendar, sessions)
+        else:
+            stored_benchmark_returns = zero_benchmark_returns(sessions)
+
         data_portal = DataPortal(
             bundle.asset_finder,
             trading_calendar=trading_calendar,
@@ -207,7 +264,7 @@ class Engine(multiprocessing.Process):
             trading_calendar=trading_calendar,
             data_frequency="daily",
         )
-        num_periods = int(trading_calendar.sessions_in_range(start_date, end_date).size)  # type: ignore
+        num_periods = int(sessions.size)  # type: ignore
         metrics_set = "default"
         blotter = "default"
         if isinstance(metrics_set, six.string_types):
@@ -232,7 +289,7 @@ class Engine(multiprocessing.Process):
             sim_params=sim_params,
             metrics_set=metrics_set,
             blotter=blotter,
-            benchmark_returns=benchmark_returns,
+            benchmark_returns=stored_benchmark_returns,
             benchmark_sid=benchmark_sid,
             handle_data=handle_data,
             analyze=self.analyze,

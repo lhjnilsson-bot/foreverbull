@@ -113,6 +113,23 @@ def _as_date(value) -> date | None:
     return date(int(ts.year), int(ts.month), int(ts.day))
 
 
+def session_labels(times) -> pd.DatetimeIndex:
+    """Zipline session labels for stored daily bars.
+
+    A provider stamps a daily bar inside its session, not on the session
+    label: Yahoo stamps the 09:30 ET open (14:30 UTC), while a date-only
+    source stamps midnight. Zipline keys daily bars, the asset start and
+    end dates, and its benchmark series on the calendar session label
+    (midnight of the trading day), so a 14:30 first bar reads as an asset
+    that starts after the first session. Keep the UTC calendar date of
+    the stored bar and drop the time of day.
+    """
+    parsed = pd.Series(pd.to_datetime(times))
+    if parsed.dt.tz is not None:
+        parsed = parsed.dt.tz_convert("UTC").dt.tz_localize(None)
+    return pd.DatetimeIndex(parsed.dt.normalize())
+
+
 def _index_timestamp(index: pd.Index, position: int) -> pd.Timestamp:
     values = index.to_numpy()
     return cast(pd.Timestamp, pd.Timestamp(str(values[position])))
@@ -181,7 +198,7 @@ class SQLIngester:
 
     def get_stock_data(self, symbol: str, from_date: date, to_date: date) -> pd.DataFrame:
         data = self.engine.get_data(symbol, from_date, to_date)
-        data["time"] = pd.to_datetime(data["time"])
+        data["time"] = session_labels(data["time"])
         data.rename(columns={"time": "Date"}, inplace=True, copy=False)
         data.set_index("Date", inplace=True)
         return data
