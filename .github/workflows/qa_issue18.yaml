@@ -137,7 +137,14 @@ jobs:
         run: fbenv create --start
       - name: QA demo backtest trades and benchmark
         run: |
+          set +e
           set -uo pipefail
+          dump_logs() {
+            echo "===== ZIPLINE LOGS ====="
+            kubectl -n foreverbull logs deploy/zipline --tail=400 2>&1 | sed -e 's/\x1b\[[0-9;]*m//g' | grep -a -v "GET /health" | tail -250 || true
+            echo "===== BROKER LOGS ====="
+            kubectl -n foreverbull logs deploy/foreverbull --tail=200 2>&1 | tail -120 || true
+          }
           mkdir -p /tmp/qa
           cp 'client/templates/simple/{{cookiecutter.project_slug}}/crossover.py' /tmp/qa/crossover.py
           fbull backtest create --file examples/demo.yaml 2>&1 | tee /tmp/qa/create.log
@@ -156,7 +163,7 @@ jobs:
           echo "===== ZIPLINE ORDERS ====="
           kubectl -n foreverbull logs deploy/zipline --tail=-1 2>/dev/null | grep -a -c "Placing order" || true
           kubectl -n foreverbull logs deploy/zipline --tail=-1 2>/dev/null | grep -a "Placing order" | head -5 || true
-          if [ "${RUN_RC}" != "0" ]; then echo "RUN_FAILED"; exit 1; fi
+          if [ "${RUN_RC}" != "0" ]; then echo "RUN_FAILED"; dump_logs; exit 1; fi
           if grep -a -q "No trades" /tmp/qa/run.txt; then echo "QA_FAIL no trades"; exit 1; fi
           if grep -a -q -E "Benchmark \(SPY\) +\+0\.0%" /tmp/qa/run.txt; then echo "QA_FAIL benchmark flat"; exit 1; fi
           echo "QA_PASS"
