@@ -16,7 +16,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           file: ./docker/Dockerfile
-          tags: lhjnilsson/foreverbull:on_commit
+          tags: lhjnilsson/foreverbull:local
           outputs: type=docker,dest=/tmp/foreverbull.tar
       - name: Upload foreverbull
         uses: actions/upload-artifact@v4
@@ -38,7 +38,7 @@ jobs:
           file: ./grafana/Dockerfile
           build-contexts: |
             foreverbull=${{ github.workspace }}
-          tags: lhjnilsson/fb-grafana:on_commit
+          tags: lhjnilsson/fb-grafana:local
           outputs: type=docker,dest=/tmp/fb_grafana.tar
       - name: Upload Grafana
         uses: actions/upload-artifact@v4
@@ -91,7 +91,7 @@ jobs:
         with:
           context: client
           file: ./client/zipline/Dockerfile
-          tags: lhjnilsson/zipline:on_commit
+          tags: lhjnilsson/zipline:local
           build-args: |
             FB_WHEEL=foreverbull-0.0.0-py3-none-any.whl
           outputs: type=docker,dest=/tmp/zipline.tar
@@ -106,7 +106,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
-      VERSION: on_commit
+      VERSION: local
       TERM: dumb
       COLUMNS: "200"
     steps:
