@@ -113,7 +113,7 @@ def print_run_summary(
         if held_no_position(periods):
             # Without this line a tradeless run reads as a broken one: zeros and dashes, no reason.
             console.print(
-                f"  No trades: the algorithm held no position on any of the {len(periods)} trading days.",
+                f"  No trades: the strategy held no position on any of the {len(periods)} trading days.",
                 highlight=False,
             )
             console.print(

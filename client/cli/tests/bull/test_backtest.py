@@ -800,7 +800,7 @@ def test_backtest_run_says_plainly_when_no_trades_were_placed(runner):
         period.clear_field("sortino")
     result, _ = _invoke_run(runner, _run_session_mocks(), flat)
     assert result.exit_code == 0
-    assert "No trades: the algorithm held no position on any of the 250 trading days." in result.stdout
+    assert "No trades: the strategy held no position on any of the 250 trading days." in result.stdout
     assert "+24.8%" in result.stdout
 
 
