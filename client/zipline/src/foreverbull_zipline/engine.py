@@ -28,6 +28,7 @@ from foreverbull.pb.foreverbull import common_pb
 from foreverbull.pb.foreverbull.backtest.service.v1 import engine_pb as engine_service_pb
 from foreverbull.pb.foreverbull.backtest.v1 import execution_pb
 from foreverbull.pb.foreverbull.finance.v1 import marketdata_pb
+from foreverbull_zipline.data_bundles.bundle_alignment import ensure_session_aligned_bundle
 from zipline import TradingAlgorithm
 
 
@@ -227,6 +228,11 @@ class Engine(multiprocessing.Process):
         if start is None or end is None:
             raise ValueError("missing execution dates")
         bundles.register(execution.backtest, None, calendar_name="XNYS")
+        # A bundle ingested before the session-alignment fix still carries
+        # 14:30 asset dates; rebuild it from its own bars once, here on the
+        # run path, so a returning user is not stuck with the old bundle.
+        # Current bundles are gated by the version marker and not rebuilt.
+        ensure_session_aligned_bundle(execution.backtest, os.environ)
         bundle = bundles.load(execution.backtest, os.environ, None)
 
         start_date = pd.Timestamp(

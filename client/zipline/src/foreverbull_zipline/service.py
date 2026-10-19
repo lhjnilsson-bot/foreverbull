@@ -23,6 +23,7 @@ from foreverbull.pb.foreverbull.backtest.service.v1 import engine_pb_grpc as eng
 from foreverbull.pb.foreverbull.finance.service.v1 import calendar_pb as calendar_service_pb
 from foreverbull.pb.foreverbull.finance.service.v1 import calendar_pb_grpc as calendar_service_pb_grpc
 from foreverbull.pb.foreverbull.finance.v1 import calendar_pb
+from foreverbull_zipline.data_bundles.bundle_alignment import stamp_bundle_version
 from foreverbull_zipline.data_bundles.foreverbull import SQLIngester
 from foreverbull_zipline.engine import ConfigError
 from foreverbull_zipline.engine import Engine
@@ -74,6 +75,7 @@ class BacktestService(engine_service_pb_grpc.EngineServiceSync, health_pb2_grpc.
             raise ValueError("ingest request has no backtest")
         bundles.register(backtest.name, SQLIngester(backtest), calendar_name="XNYS")
         bundles.ingest(backtest.name, os.environ, pd.Timestamp.utcnow(), [], True)
+        stamp_bundle_version(backtest.name, os.environ)
         self.bundle = bundles.load(backtest.name, os.environ, None)
         self.logger.debug("ingestion completed")
         if request.has_field("bucket") and request.has_field("object"):

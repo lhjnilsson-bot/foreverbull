@@ -17,6 +17,10 @@ It is a uv workspace member (`foreverbull-zipline`). Do not run it as a host pro
 
 Entry point: `python -m foreverbull_zipline` (`__main__.py`). The image health check probes gRPC `:50055`.
 
+## Bundle alignment
+
+Ingested bars are keyed on Zipline session labels (midnight of the trading day), and each ingest is stamped with that alignment version inside its ingest directory, so the stamp travels with the bundle tarball. A bundle ingested before the alignment fix carries provider stamps inside the session (Yahoo's 14:30 UTC open) instead. On its first run after the fix the engine rebuilds such a bundle once, from its own stored bars, before the algorithm starts; a bundle stamped with the current version is checked and left alone, so later runs never pay a re-ingest. No delete-and-recreate is needed for an old backtest.
+
 ## Build the image
 
 From `client/` (needs a built `foreverbull` wheel in `client/dist/`):
