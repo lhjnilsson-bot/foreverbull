@@ -1,0 +1,248 @@
+name: QA PR135 kind scenario-b 90d82ce
+on:
+  push:
+    branches: [qa/pr135-kind]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-docker-foreverbull:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          file: ./docker/Dockerfile
+          tags: lhjnilsson/foreverbull:local
+          outputs: type=docker,dest=/tmp/foreverbull.tar
+      - uses: actions/upload-artifact@v4
+        with: {name: e2e-foreverbull, path: /tmp/foreverbull.tar, retention-days: 1}
+  build-docker-grafana:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: grafana
+          file: ./grafana/Dockerfile
+          build-contexts: |
+            foreverbull=${{ github.workspace }}
+          tags: lhjnilsson/fb-grafana:local
+          outputs: type=docker,dest=/tmp/fb_grafana.tar
+      - uses: actions/upload-artifact@v4
+        with: {name: e2e-fb-grafana, path: /tmp/fb_grafana.tar, retention-days: 1}
+  build-python-packages:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: ./client}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build --all-packages
+      - uses: actions/upload-artifact@v4
+        with: {name: e2e-dist, path: client/dist, retention-days: 1}
+  build-python-packages-old:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: ./client}}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: aa996d5d70ca9868d84846fb96b70df567d63d42}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build --all-packages
+      - uses: actions/upload-artifact@v4
+        with: {name: e2e-dist-old, path: client/dist, retention-days: 1}
+  build-docker-zipline:
+    needs: [build-python-packages]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: {name: e2e-dist, path: /tmp/pypi}
+      - name: Stage wheel
+        run: |
+          wheel="$(find /tmp/pypi -name 'foreverbull-0.0.0-py3-none-any.whl' -print -quit)"
+          test -s "${wheel}"
+          cp "${wheel}" client/foreverbull-0.0.0-py3-none-any.whl
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: client
+          file: ./client/zipline/Dockerfile
+          tags: lhjnilsson/zipline:local
+          build-args: |
+            FB_WHEEL=foreverbull-0.0.0-py3-none-any.whl
+          outputs: type=docker,dest=/tmp/zipline.tar
+      - uses: actions/upload-artifact@v4
+        with: {name: e2e-zipline, path: /tmp/zipline.tar, retention-days: 1}
+  build-docker-zipline-old:
+    needs: [build-python-packages-old]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: aa996d5d70ca9868d84846fb96b70df567d63d42}
+      - uses: actions/download-artifact@v4
+        with: {name: e2e-dist-old, path: /tmp/pypi}
+      - name: Stage wheel
+        run: |
+          wheel="$(find /tmp/pypi -name 'foreverbull-0.0.0-py3-none-any.whl' -print -quit)"
+          test -s "${wheel}"
+          cp "${wheel}" client/foreverbull-0.0.0-py3-none-any.whl
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: client
+          file: ./client/zipline/Dockerfile
+          tags: lhjnilsson/zipline:local
+          build-args: |
+            FB_WHEEL=foreverbull-0.0.0-py3-none-any.whl
+          outputs: type=docker,dest=/tmp/zipline.tar
+      - uses: actions/upload-artifact@v4
+        with: {name: e2e-zipline-old, path: /tmp/zipline.tar, retention-days: 1}
+  qa:
+    needs: [build-docker-foreverbull, build-docker-grafana, build-docker-zipline, build-python-packages, build-docker-zipline-old, build-python-packages-old]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      VERSION: local
+      TERM: dumb
+      COLUMNS: "200"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: {name: e2e-foreverbull, path: /tmp/images-new}
+      - uses: actions/download-artifact@v4
+        with: {name: e2e-fb-grafana, path: /tmp/images-new}
+      - uses: actions/download-artifact@v4
+        with: {name: e2e-zipline, path: /tmp/images-new}
+      - uses: actions/download-artifact@v4
+        with: {name: e2e-dist, path: /tmp/pypi-new}
+      - uses: actions/download-artifact@v4
+        with: {name: e2e-zipline-old, path: /tmp/images-old}
+      - uses: actions/download-artifact@v4
+        with: {name: e2e-dist-old, path: /tmp/pypi-old}
+      - uses: azure/setup-helm@v4
+        with: {version: v3.16.4}
+      - uses: helm/kind-action@v1.14.0
+        with: {version: v0.31.0, kubectl_version: v1.35.0, install_only: true}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Stage OLD (aa996d5) env and create demo there
+        run: |
+          set +e
+          mkdir -p /tmp/qa
+          {
+            echo "TESTED_NEW_HEAD=90d82ce1bdb8e7024568fc6f7cd984e524b75206"
+            echo "OLD_HEAD=aa996d5d70ca9868d84846fb96b70df567d63d42"
+            git rev-parse HEAD
+          } | tee /tmp/qa/heads.txt
+          docker load -i /tmp/images-new/foreverbull.tar
+          docker load -i /tmp/images-new/fb_grafana.tar
+          docker load -i /tmp/images-old/zipline.tar
+          docker images lhjnilsson/zipline:local --digests | tee /tmp/qa/old-zipline-image.txt
+          pip install /tmp/pypi-old/*.whl 2>&1 | tail -5
+          pip install "sqlalchemy==2.0.42"
+          which fbull fbenv
+          fbenv create --start 2>&1 | tee /tmp/qa/fbenv-old.log
+          echo "FBENV_OLD_RC=${PIPESTATUS[0]}" | tee -a /tmp/qa/fbenv-old.log
+          kubectl -n foreverbull get pods -o wide
+          cp 'client/templates/simple/{{cookiecutter.project_slug}}/crossover.py' /tmp/qa/crossover.py
+          echo "===== CREATE demo WITH OLD aa996d5 ZIPLINE (yahoo) ====="
+          fbull backtest create --file examples/demo.yaml --provider yahoo 2>&1 | tee /tmp/qa/create-old.log
+          echo "CREATE_OLD_RC=${PIPESTATUS[0]}" | tee -a /tmp/qa/create-old.log
+          echo "===== DB SPY FIRST BARS (old-created, expect 14:30) ====="
+          kubectl -n foreverbull exec deploy/postgres -- psql -U foreverbull -d foreverbull -c "SELECT symbol,time,open,close FROM ohlc WHERE symbol='SPY' ORDER BY time LIMIT 3;" | tee /tmp/qa/spy-old.txt
+          kubectl -n foreverbull exec deploy/postgres -- psql -U foreverbull -d foreverbull -c "SELECT count(*) AS spy_bars, min(time) AS first_time, max(time) AS last_time FROM ohlc WHERE symbol='SPY';" | tee -a /tmp/qa/spy-old.txt
+      - name: Swap to NEW 90d82ce without recreating, run old demo twice
+        run: |
+          set +e
+          pip install --force-reinstall /tmp/pypi-new/*.whl 2>&1 | tail -5
+          pip install "sqlalchemy==2.0.42"
+          docker load -i /tmp/images-new/zipline.tar
+          docker images lhjnilsson/zipline:local --digests | tee /tmp/qa/new-zipline-image.txt
+          VERSION=local fbenv update 2>&1 | tee /tmp/qa/fbenv-update.log
+          echo "FBENV_UPDATE_RC=${PIPESTATUS[0]}" | tee -a /tmp/qa/fbenv-update.log
+          echo "===== SWAP ZIPLINE VIA SCALE (avoid surge-pending broker, clear cached zipline PodIP) ====="
+          kubectl -n foreverbull scale deploy/foreverbull --replicas=0
+          for i in $(seq 1 36); do kubectl -n foreverbull get pods | grep -q "foreverbull-" || break; sleep 5; done
+          kubectl -n foreverbull get pods -o wide || true
+          kubectl -n foreverbull rollout restart deploy/zipline
+          kubectl -n foreverbull rollout status deploy/zipline --timeout=300s
+          kubectl -n foreverbull scale deploy/foreverbull --replicas=1
+          kubectl -n foreverbull rollout status deploy/foreverbull --timeout=300s || kubectl -n foreverbull describe pods -l app.kubernetes.io/name=foreverbull || true
+          kubectl -n foreverbull wait --for=condition=available deploy/foreverbull deploy/zipline --timeout=300s || true
+          sleep 10
+          kubectl -n foreverbull get pods -o wide
+          echo "===== NEW CODE CHECK IN ZIPLINE POD ====="
+          kubectl -n foreverbull exec deploy/zipline -- python -c "from foreverbull_zipline.data_bundles.bundle_alignment import ensure_session_aligned_bundle, _close_bundle; print('NEW_ZIPLINE_ALIGNMENT_MODULE_OK'); print('NEW_CLOSE_BUNDLE_OK', callable(_close_bundle))" 2>&1 | tee /tmp/qa/new-code-check.txt
+          echo "===== BUNDLE STATE BEFORE RUN1 (expect misaligned True, version 0) ====="
+          kubectl -n foreverbull exec deploy/zipline -- python -c "import os; from foreverbull_zipline.data_bundles.bundle_alignment import bundle_dates_misaligned, bundle_version; print('MISALIGNED_BEFORE', bundle_dates_misaligned('demo', os.environ)); print('VERSION_BEFORE', bundle_version('demo', os.environ))" 2>&1 | tee /tmp/qa/bundle-before.txt
+          for i in $(seq 1 30); do fbull backtest list >/tmp/qa/list-after-swap.log 2>&1 && break; sleep 5; done
+          cat /tmp/qa/list-after-swap.log
+          echo "===== RUN1 OLD-CREATED demo WITHOUT RECREATE ====="
+          fbull backtest run demo /tmp/qa/crossover.py 2>&1 | tee /tmp/qa/run1.log
+          echo "RUN1_RC=${PIPESTATUS[0]}" | tee -a /tmp/qa/run1.log
+          sed -e 's/\x1b\[[0-9;]*m//g' /tmp/qa/run1.log > /tmp/qa/run1.txt
+          cat /tmp/qa/run1.txt
+          echo "===== BUNDLE STATE AFTER RUN1 (expect misaligned False, version 1) ====="
+          kubectl -n foreverbull exec deploy/zipline -- python -c "import os; from foreverbull_zipline.data_bundles.bundle_alignment import bundle_dates_misaligned, bundle_version; print('MISALIGNED_AFTER1', bundle_dates_misaligned('demo', os.environ)); print('VERSION_AFTER1', bundle_version('demo', os.environ))" 2>&1 | tee /tmp/qa/bundle-after1.txt
+          echo "===== DB LATEST PERIODS AFTER RUN1 ====="
+          kubectl -n foreverbull exec deploy/postgres -- psql -U foreverbull -d foreverbull -c "SELECT backtest_execution,count(*) n,min(date) first_date,max(date) last_date,(array_agg(portfolio_value ORDER BY date))[1] first_pv,(array_agg(portfolio_value ORDER BY date DESC))[1] last_pv,(array_agg(benchmark_period_return ORDER BY date DESC))[1] last_bench_ret,(array_agg(algorithm_period_return ORDER BY date DESC))[1] last_algo_ret,max(longs_count) max_longs, sum(CASE WHEN benchmark_period_return=0 THEN 1 ELSE 0 END) zero_bench_days FROM backtest_execution_period WHERE backtest_execution=(SELECT backtest_execution FROM backtest_execution_period ORDER BY id DESC LIMIT 1) GROUP BY backtest_execution;" | tee /tmp/qa/db-run1.txt
+          kubectl -n foreverbull exec deploy/postgres -- psql -U foreverbull -d foreverbull -c "SELECT date,portfolio_value,benchmark_period_return,algorithm_period_return,longs_count FROM backtest_execution_period WHERE backtest_execution=(SELECT backtest_execution FROM backtest_execution_period ORDER BY id DESC LIMIT 1) ORDER BY date DESC LIMIT 3;"
+          echo "===== ZIPLINE ORDERS COUNT RUN1 ====="
+          kubectl -n foreverbull logs deploy/zipline --tail=-1 2>/dev/null | grep -a -c "Placing order" || true
+          kubectl -n foreverbull logs deploy/zipline --tail=-1 2>/dev/null | grep -a "Placing order" | head -5 || true
+          kubectl -n foreverbull logs deploy/zipline --tail=400 2>&1 | sed -e 's/\x1b\[[0-9;]*m//g' | grep -a -E "rebuild|stale|aligned|BundleData|close" | head -20 || true
+          echo "===== RUN2 OLD-CREATED demo SECOND TIME ====="
+          fbull backtest run demo /tmp/qa/crossover.py 2>&1 | tee /tmp/qa/run2.log
+          echo "RUN2_RC=${PIPESTATUS[0]}" | tee -a /tmp/qa/run2.log
+          sed -e 's/\x1b\[[0-9;]*m//g' /tmp/qa/run2.log > /tmp/qa/run2.txt
+          cat /tmp/qa/run2.txt
+          echo "===== BUNDLE STATE AFTER RUN2 ====="
+          kubectl -n foreverbull exec deploy/zipline -- python -c "import os; from foreverbull_zipline.data_bundles.bundle_alignment import bundle_dates_misaligned, bundle_version; print('MISALIGNED_AFTER2', bundle_dates_misaligned('demo', os.environ)); print('VERSION_AFTER2', bundle_version('demo', os.environ))" 2>&1 | tee /tmp/qa/bundle-after2.txt
+          kubectl -n foreverbull exec deploy/postgres -- psql -U foreverbull -d foreverbull -c "SELECT backtest_execution,count(*) n,(array_agg(portfolio_value ORDER BY date))[1] first_pv,(array_agg(portfolio_value ORDER BY date DESC))[1] last_pv,(array_agg(benchmark_period_return ORDER BY date DESC))[1] last_bench_ret,(array_agg(algorithm_period_return ORDER BY date DESC))[1] last_algo_ret,max(longs_count) max_longs FROM backtest_execution_period WHERE backtest_execution=(SELECT backtest_execution FROM backtest_execution_period ORDER BY id DESC LIMIT 1) GROUP BY backtest_execution;" | tee /tmp/qa/db-run2.txt
+          echo "===== FORCED REBUILD FAILURE (in-pod function-level, cheap) ====="
+          kubectl -n foreverbull exec deploy/zipline -- python -c "
+          from foreverbull_zipline.data_bundles import bundle_alignment as ba
+          ba.bundle_dates_misaligned=lambda *a, **k: True
+          def fail(n, e=None):
+              raise AttributeError(\"'BundleData' object has no attribute 'close'\")
+          try:
+              ba.ensure_session_aligned_bundle('demo', rebuild=fail)
+              print('FORCED_NO_ERROR')
+          except RuntimeError as err:
+              msg=str(err)
+              print('FORCED_MSG='+msg)
+              print('FORCED_LEAKS_BUNDLEDATA', 'BundleData' in msg)
+              print('FORCED_LEAKS_CLOSE_WORD', 'close' in msg.lower().replace('fbull backtest delete','').replace('fbull backtest create','') if False else ('BundleData' in msg))
+          " 2>&1 | tee /tmp/qa/forced-failure.txt
+          echo "===== EVALUATION ====="
+          FAIL=0
+          grep -a -q "CREATE_OLD_RC=0" /tmp/qa/create-old.log && echo "STEP1_OLD_CREATE PASS" || { echo "STEP1_OLD_CREATE FAIL"; FAIL=1; }
+          grep -a -q "14:30" /tmp/qa/spy-old.txt && echo "STEP1_SP_1430 PASS" || { echo "STEP1_SP_1430 FAIL"; FAIL=1; }
+          grep -a -q "NEW_ZIPLINE_ALIGNMENT_MODULE_OK" /tmp/qa/new-code-check.txt && echo "STEP1_NEW_MODULE PASS" || { echo "STEP1_NEW_MODULE FAIL"; FAIL=1; }
+          grep -a -q "MISALIGNED_BEFORE True" /tmp/qa/bundle-before.txt && echo "STEP1_MISALIGNED_BEFORE PASS" || echo "STEP1_MISALIGNED_BEFORE CHECK_LOG"
+          grep -a -q "RUN1_RC=0" /tmp/qa/run1.log && echo "STEP2_RUN1 PASS" || { echo "STEP2_RUN1 FAIL"; FAIL=1; }
+          grep -a -q "MISALIGNED_AFTER1 False" /tmp/qa/bundle-after1.txt && echo "STEP2_REBUILT_ALIGNED PASS" || echo "STEP2_REBUILT_ALIGNED CHECK_LOG"
+          grep -a -q "VERSION_AFTER1 1" /tmp/qa/bundle-after1.txt && echo "STEP2_STAMPED_V1 PASS" || echo "STEP2_STAMPED_V1 CHECK_LOG"
+          if grep -a -q "No trades" /tmp/qa/run1.txt; then echo "STEP2_NO_TRADES FAIL present"; FAIL=1; else echo "STEP2_NO_TRADES PASS absent"; fi
+          if grep -a -q -E "Benchmark \(SPY\) +\+0\.0%" /tmp/qa/run1.txt; then echo "STEP2_BENCHMARK FAIL flat"; FAIL=1; else echo "STEP2_BENCHMARK PASS non-flat-or-db"; fi
+          grep -a -q "RUN2_RC=0" /tmp/qa/run2.log && echo "STEP3_RUN2 PASS" || { echo "STEP3_RUN2 FAIL"; FAIL=1; }
+          grep -a -q "VERSION_AFTER2 1" /tmp/qa/bundle-after2.txt && echo "STEP3_STILL_V1 PASS" || echo "STEP3_STILL_V1 CHECK_LOG"
+          grep -a -q "FORCED_MSG=Could not update the backtest" /tmp/qa/forced-failure.txt && echo "STEP4_FORCED_WORDING PASS" || echo "STEP4_FORCED_WORDING CHECK_LOG"
+          echo "QA_FAIL_FLAG=${FAIL}"
+          echo "===== ZIPLINE LOGS TAIL ====="
+          kubectl -n foreverbull logs deploy/zipline --tail=300 2>&1 | sed -e 's/\x1b\[[0-9;]*m//g' | grep -a -v "GET /health" | tail -150 || true
+          exit ${FAIL}
+      - name: Upload QA logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: qa-pr135-logs, path: /tmp/qa, retention-days: 7}
