@@ -1,0 +1,162 @@
+name: QA issue18 demo trades
+on:
+  push:
+    branches: [qa/issue18-kind]
+permissions:
+  contents: read
+jobs:
+  build-docker-foreverbull:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Foreverbull
+        uses: docker/build-push-action@v6
+        with:
+          file: ./docker/Dockerfile
+          tags: lhjnilsson/foreverbull:on_commit
+          outputs: type=docker,dest=/tmp/foreverbull.tar
+      - name: Upload foreverbull
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-foreverbull
+          path: /tmp/foreverbull.tar
+          retention-days: 1
+  build-docker-grafana:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Grafana
+        uses: docker/build-push-action@v6
+        with:
+          context: grafana
+          file: ./grafana/Dockerfile
+          build-contexts: |
+            foreverbull=${{ github.workspace }}
+          tags: lhjnilsson/fb-grafana:on_commit
+          outputs: type=docker,dest=/tmp/fb_grafana.tar
+      - name: Upload Grafana
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-fb-grafana
+          path: /tmp/fb_grafana.tar
+          retention-days: 1
+  build-python-packages:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./client
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+      - name: Build
+        run: uv build --all-packages
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-dist
+          path: client/dist
+          retention-days: 1
+  build-docker-zipline:
+    needs: [build-python-packages]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Python packages
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-dist
+          path: /tmp/pypi
+      - name: Stage foreverbull wheel
+        run: |
+          set -euo pipefail
+          wheel="$(find /tmp/pypi -name 'foreverbull-0.0.0-py3-none-any.whl' -print -quit)"
+          test -s "${wheel}"
+          cp "${wheel}" client/foreverbull-0.0.0-py3-none-any.whl
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Zipline
+        uses: docker/build-push-action@v6
+        with:
+          context: client
+          file: ./client/zipline/Dockerfile
+          tags: lhjnilsson/zipline:on_commit
+          build-args: |
+            FB_WHEEL=foreverbull-0.0.0-py3-none-any.whl
+          outputs: type=docker,dest=/tmp/zipline.tar
+      - name: Upload zipline
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-zipline
+          path: /tmp/zipline.tar
+          retention-days: 1
+  qa:
+    needs: [build-docker-foreverbull, build-docker-grafana, build-docker-zipline, build-python-packages]
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      VERSION: on_commit
+      TERM: dumb
+      COLUMNS: "200"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: {name: e2e-foreverbull, path: /tmp/images}
+      - uses: actions/download-artifact@v4
+        with: {name: e2e-zipline, path: /tmp/images}
+      - uses: actions/download-artifact@v4
+        with: {name: e2e-fb-grafana, path: /tmp/images}
+      - uses: actions/download-artifact@v4
+        with: {name: e2e-dist, path: /tmp/pypi}
+      - uses: azure/setup-helm@v4
+        with: {version: v3.16.4}
+      - uses: helm/kind-action@v1.14.0
+        with: {version: v0.31.0, kubectl_version: v1.35.0, install_only: true}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install CLI and load images
+        run: |
+          set -euxo pipefail
+          for f in /tmp/images/*.tar; do docker load -i "$f"; done
+          pip install /tmp/pypi/*.whl
+          pip install "sqlalchemy==2.0.42"  # locked uv version; unlocked 2.1 defaults to psycopg3, which is not a dependency
+          which fbull fbenv
+          fbull --help | head -20
+      - name: fbenv create --start
+        run: fbenv create --start
+      - name: QA demo backtest trades and benchmark
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/qa
+          cp 'client/templates/simple/{{cookiecutter.project_slug}}/crossover.py' /tmp/qa/crossover.py
+          fbull backtest create --file examples/demo.yaml 2>&1 | tee /tmp/qa/create.log
+          CREATE_RC=${PIPESTATUS[0]}
+          echo "CREATE_RC=${CREATE_RC}"
+          if [ "${CREATE_RC}" != "0" ]; then kubectl -n foreverbull logs deploy/foreverbull --tail=120 || true; exit 1; fi
+          fbull backtest run demo /tmp/qa/crossover.py 2>&1 | tee /tmp/qa/run.log
+          RUN_RC=${PIPESTATUS[0]}
+          echo "RUN_RC=${RUN_RC}"
+          sed -e 's/\x1b\[[0-9;]*m//g' /tmp/qa/run.log > /tmp/qa/run.txt
+          echo "===== VERBATIM SUMMARY ====="
+          awk '/Backtest finished/{flag=1} flag{print} /Charts:/{flag=0}' /tmp/qa/run.txt
+          SHORT_ID=$(grep -a 'Details:' /tmp/qa/run.txt | tail -1 | sed -n 's/.*backtest execution \([A-Za-z0-9-]*\).*/\1/p')
+          echo "===== DETAILS ${SHORT_ID} ====="
+          fbull backtest execution "${SHORT_ID}" 2>&1 | sed -e 's/\x1b\[[0-9;]*m//g' | head -80
+          echo "===== ZIPLINE ORDERS ====="
+          kubectl -n foreverbull logs deploy/zipline --tail=-1 2>/dev/null | grep -a -c "Placing order" || true
+          kubectl -n foreverbull logs deploy/zipline --tail=-1 2>/dev/null | grep -a "Placing order" | head -5 || true
+          if [ "${RUN_RC}" != "0" ]; then echo "RUN_FAILED"; exit 1; fi
+          if grep -a -q "No trades" /tmp/qa/run.txt; then echo "QA_FAIL no trades"; exit 1; fi
+          if grep -a -q -E "Benchmark \(SPY\) +\+0\.0%" /tmp/qa/run.txt; then echo "QA_FAIL benchmark flat"; exit 1; fi
+          echo "QA_PASS"
