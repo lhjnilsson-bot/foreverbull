@@ -67,6 +67,15 @@ def _benchmark_cells(benchmark: str, period: execution_pb.Period) -> tuple[str, 
     return label, format_percent(period.benchmark_period_return)
 
 
+def held_no_position(periods: list[execution_pb.Period]) -> bool:
+    """No period closed with a long or a short.
+
+    Zipline fills a daily order on the next bar, so any filled order shows up as a
+    held position at some period close. Counts are integers, so no float compare.
+    """
+    return all(period.longs_count == 0 and period.shorts_count == 0 for period in periods)
+
+
 def metrics_table(benchmark: str, period: execution_pb.Period) -> Table:
     """The last period carries the run's cumulative return, ratios, and drawdown."""
     table = Table.grid(padding=(0, 2))
@@ -101,6 +110,17 @@ def print_run_summary(
         console.print()
         console.print(Padding(metrics_table(benchmark, periods[-1]), (0, 0, 0, 2), expand=False))
         console.print()
+        if held_no_position(periods):
+            # Without this line a tradeless run reads as a broken one: zeros and dashes, no reason.
+            console.print(
+                f"  No trades: the algorithm held no position on any of the {len(periods)} trading days.",
+                highlight=False,
+            )
+            console.print(
+                "  Return and drawdown stay at 0 and Sharpe and Sortino are not defined.",
+                highlight=False,
+            )
+            console.print()
     # soft_wrap leaves wrapping to the terminal, so a pasted command or URL has no inserted newline.
     console.print(
         f"  Details: uv run fbull backtest execution {short_execution_id(execution_id)}",

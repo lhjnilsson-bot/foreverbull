@@ -703,6 +703,7 @@ def _final_period(**overrides) -> execution_pb.Period:
         "sharpe": 1.35,
         "sortino": 1.1,
         "benchmark_period_return": 0.031,
+        "longs_count": 2,
     }
     fields.update(overrides)
     return execution_pb.Period(**fields)
@@ -780,6 +781,34 @@ def test_backtest_run_says_when_backtest_has_no_benchmark(runner):
     assert result.exit_code == 0
     assert "Benchmark" in result.stdout
     assert "not set" in result.stdout
+
+
+def test_backtest_run_says_plainly_when_no_trades_were_placed(runner):
+    # A run that never held a position stores zeros and no ratios; say why instead of leaving them unexplained.
+    flat = [
+        _final_period(
+            portfolio_value=100000.0,
+            algorithm_period_return=0.0,
+            max_drawdown=0.0,
+            longs_count=0,
+            benchmark_period_return=0.248,
+        )
+        for _ in range(250)
+    ]
+    for period in flat:
+        period.clear_field("sharpe")
+        period.clear_field("sortino")
+    result, _ = _invoke_run(runner, _run_session_mocks(), flat)
+    assert result.exit_code == 0
+    assert "No trades: the algorithm held no position on any of the 250 trading days." in result.stdout
+    assert "+24.8%" in result.stdout
+
+
+def test_backtest_run_with_a_held_position_has_no_no_trades_line(runner):
+    periods = [_final_period(longs_count=0), _final_period(longs_count=0, shorts_count=1), _final_period(longs_count=0)]
+    result, _ = _invoke_run(runner, _run_session_mocks(), periods)
+    assert result.exit_code == 0
+    assert "No trades" not in result.stdout
 
 
 def test_backtest_run_without_stored_periods_says_so(runner):
