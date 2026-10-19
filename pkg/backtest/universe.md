@@ -280,6 +280,14 @@ Keep writing `asset(symbol, name)` and `ohlc(symbol, time)`. Mapping layer only.
 
 Empty universe → empty slice (algorithm sees no names). That is different from today’s bug, where the slice is always empty.
 
+### 📝 7.3 Symbol-list backtests
+
+A backtest created from a symbol list (`fbull backtest create --file`, for example `examples/demo.yaml`) has no `universe_member` rows. Its universe is the enabled `backtest_period_asset` rows of the period whose `[start_date, end_date]` holds the UTC date of `t`, sorted, each symbol once. That is the set `DownloadFinancialData` and `SQLIngester` put in the bundle. A disabled asset has no bars, so it is not passed.
+
+The session decides once, before the first bar: any `universe_member` row for the backtest means §7.2, and an empty universe at `t` stays `[]`. No rows means this section. A failed read of the backtest or its membership fails the run before Zipline starts.
+
+`RunBacktestRequest.benchmark` is the stored `backtest.benchmark` for both kinds. An empty benchmark makes Zipline use a flat zero series, so `benchmark_period_return` would be stored as `0`.
+
 ## 8. Zipline `auto_close_date`
 
 `SQLIngester.create_metadata` already declares `("auto_close_date", "datetime64[ns]")`. The writer builds `autoclose_date = end_date + pd.Timedelta(days=1)` then sets it to `None`.
@@ -346,6 +354,6 @@ Reuse these as-is where the new tables touch them:
 
 ## 12. Status
 
-Landed. ETF create samples month-end iShares as-of dates (filesystem JSON cache; Equity rows with ISIN). Identity is ISIN (`instrument` + `asset_symbol`); ticker is a dated alias (FB then META is one asset). Membership is half-open `universe_member` intervals from consecutive as-of diffs: adds/drops change membership, ticker changes do not. Ingest unions every alias plus the benchmark; the session maps members through `asset_symbol` at `t` into `Process` (empty universe stays `[]`). SQLIngester writes `auto_close_date` on a drop and keeps one sid across a rename. `GetAsset` failure is not a membership drop. Yearly `backtest_period` / `backtest_period_asset` rows remain for ingest windows; they are not membership.
+Landed. ETF create samples month-end iShares as-of dates (filesystem JSON cache; Equity rows with ISIN). Identity is ISIN (`instrument` + `asset_symbol`); ticker is a dated alias (FB then META is one asset). Membership is half-open `universe_member` intervals from consecutive as-of diffs: adds/drops change membership, ticker changes do not. Ingest unions every alias plus the benchmark; the session maps members through `asset_symbol` at `t` into `Process` (empty universe stays `[]`). A symbol-list backtest has no membership rows and passes its enabled period assets instead (§7.3). SQLIngester writes `auto_close_date` on a drop and keeps one sid across a rename. `GetAsset` failure is not a membership drop. Yearly `backtest_period` / `backtest_period_asset` rows remain for ingest windows; they are not membership.
 
 Not in this work: reintroducing `MARKET_DATA_PROVIDER`; daily holdings dumps; the `etf_holdings_snapshot` table (raw JSON cache is enough); hysteresis; rewriting `ohlc` off `symbol`.
