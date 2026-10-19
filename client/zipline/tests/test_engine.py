@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from foreverbull_zipline.data_bundles.bundle_alignment import ensure_session_aligned_bundle
 from foreverbull_zipline.data_bundles.foreverbull import SQLIngester
 from foreverbull_zipline.engine import Engine
 from foreverbull_zipline.engine import benchmark_returns
@@ -18,12 +19,18 @@ from foreverbull_zipline.engine import load_benchmark_returns
 from foreverbull_zipline.engine import zero_benchmark_returns
 from foreverbull_zipline.service import BacktestService
 from zipline.data import bundles
+from zipline.data.data_portal import DataPortal
+from zipline.extensions import load
+from zipline.finance import metrics
+from zipline.finance.blotter import Blotter
+from zipline.finance.trading import SimulationParameters
 from zipline.utils.calendar_utils import get_calendar
 
 from foreverbull.pb.foreverbull.backtest.service.v1 import engine_pb as engine_service_pb
 from foreverbull.pb.foreverbull.backtest.v1 import backtest_pb
 from foreverbull.pb.foreverbull.backtest.v1 import execution_pb
 from foreverbull.pb.foreverbull.finance.v1 import marketdata_pb
+from zipline import TradingAlgorithm
 
 
 def test_start_stop(fb_env, spawn_process):
@@ -251,3 +258,123 @@ def test_zero_benchmark_returns_stay_on_sessions():
     assert list(returns.index) == list(sessions)
     assert pd.Timestamp("2023-01-07") not in returns.index
     assert bool((returns == 0.0).all())
+
+
+def _write_e2e_bundle(bundle_name: str, sessions, *, stale: bool) -> None:
+    spy_closes = [100.0 + index for index in range(len(sessions))]
+    aapl_closes = [50.0 + 0.5 * index for index in range(len(sessions))]
+    index = sessions + pd.Timedelta(hours=14, minutes=30) if stale else sessions
+
+    def _frame(closes: list[float]) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "open": [close - 1.0 for close in closes],
+                "high": [close + 1.0 for close in closes],
+                "low": [close - 2.0 for close in closes],
+                "close": closes,
+                "volume": [1000] * len(closes),
+            },
+            index=index,
+        )
+
+    metadata = pd.DataFrame(
+        {
+            "sid": [0, 1],
+            "start_date": [index[0], index[0]],
+            "end_date": [index[-1], index[-1]],
+            "auto_close_date": [index[-1] + pd.Timedelta(days=1)] * 2,
+            "symbol": ["AAPL", "SPY"],
+            "exchange": ["NASDAQ", "NASDAQ"],
+        }
+    )
+
+    def ingest_bundle(
+        _environ,
+        asset_db_writer,
+        _minute_bar_writer,
+        daily_bar_writer,
+        adjustment_writer,
+        _calendar,
+        _start_session,
+        _end_session,
+        _cache,
+        _show_progress,
+        _output_dir,
+    ):
+        daily_bar_writer.write([(0, _frame(aapl_closes)), (1, _frame(spy_closes))])
+        asset_db_writer.write(equities=metadata)
+        adjustment_writer.write()
+
+    bundles.register(bundle_name, ingest_bundle, calendar_name="XNYS")
+    bundles.ingest(bundle_name, os.environ, pd.Timestamp("2023-02-01", tz="UTC"), [], False)
+
+
+def _run_synthetic_algorithm(bundle_name: str, sessions):
+    bundle = bundles.load(bundle_name, os.environ, None)
+    calendar = get_calendar("XNYS")
+    benchmark_asset = bundle.asset_finder.lookup_symbol("SPY", as_of_date=None)
+    stored_benchmark_returns = load_benchmark_returns(bundle, benchmark_asset, calendar, sessions)
+    data_portal = DataPortal(
+        bundle.asset_finder,
+        trading_calendar=calendar,
+        first_trading_day=bundle.equity_minute_bar_reader.first_trading_day,
+        equity_minute_reader=bundle.equity_minute_bar_reader,
+        equity_daily_reader=bundle.equity_daily_bar_reader,
+        adjustment_reader=bundle.adjustment_reader,
+    )
+
+    def initialize(context):
+        context.asset = context.symbol("AAPL")
+        context.ordered = False
+
+    def handle_data(context, data):
+        if not context.ordered and data.can_trade(context.asset):
+            context.order(context.asset, 10)
+            context.ordered = True
+
+    trading_algorithm = TradingAlgorithm(
+        namespace={},
+        data_portal=data_portal,
+        trading_calendar=calendar,
+        sim_params=SimulationParameters(
+            start_session=sessions[0],
+            end_session=sessions[-1],
+            trading_calendar=calendar,
+            data_frequency="daily",
+        ),
+        metrics_set=metrics.load("default"),
+        blotter=load(Blotter, "default"),
+        benchmark_returns=stored_benchmark_returns,
+        benchmark_sid=None,
+        initialize=initialize,
+        handle_data=handle_data,
+    )
+    return trading_algorithm.run(), benchmark_asset
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_trading_algorithm_cumulative_benchmark_end_to_end(tmp_path, monkeypatch, stale):
+    # Real TradingAlgorithm over a synthetic bundle, no database: SPY
+    # closes rise 100 -> 119 with the first open at 99, so the cumulative
+    # benchmark return the run reports must be 119/99 - 1, not flat, and
+    # the AAPL order placed on the first session must be in the result.
+    # The stale variant is a pre-alignment bundle (14:30 stamps, no
+    # marker); the run-path check rebuilds it before the algorithm runs,
+    # exactly as Engine._run does, so it must reach the same numbers.
+    monkeypatch.setenv("ZIPLINE_ROOT", str(tmp_path))
+    bundle_name = "e2e_stale_bundle" if stale else "e2e_fresh_bundle"
+    sessions = _sessions("2023-01-03", "2023-01-31")
+    _write_e2e_bundle(bundle_name, sessions, stale=stale)
+    try:
+        rebuilt = ensure_session_aligned_bundle(bundle_name, os.environ)
+        assert rebuilt is stale
+
+        result, benchmark_asset = _run_synthetic_algorithm(bundle_name, sessions)
+
+        assert benchmark_asset.start_date == sessions[0]
+        assert len(result) == len(sessions)
+        assert result["benchmark_period_return"].iloc[-1] == pytest.approx(119.0 / 99.0 - 1.0)
+        assert result["algorithm_period_return"].iloc[-1] > 0.0
+        assert result["portfolio_value"].iloc[-1] > 100_000.0
+    finally:
+        bundles.unregister(bundle_name)
