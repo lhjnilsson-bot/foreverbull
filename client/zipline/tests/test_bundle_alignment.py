@@ -2,6 +2,7 @@ import os
 import sqlite3
 
 from pathlib import Path
+from typing import NamedTuple
 
 import pandas as pd
 import pytest
@@ -180,3 +181,61 @@ def test_rebuild_realigns_a_stale_bundle_and_preserves_its_prices(tmp_path, monk
         assert ensure_session_aligned_bundle("stale_rebuild_bundle", os.environ) is False
     finally:
         bundles.unregister("stale_rebuild_bundle")
+
+
+class _BundleWithoutClose(NamedTuple):
+    # Exactly the fields zipline's BundleData carries, in its order, but
+    # no close(): the shape older zipline-reloaded builds returned and
+    # the live image still loads, unlike the pinned build used here.
+    asset_finder: object
+    equity_minute_bar_reader: object
+    equity_daily_bar_reader: object
+    adjustment_reader: object
+
+
+def test_rebuild_succeeds_when_the_loaded_bundle_has_no_close(tmp_path, monkeypatch):
+    # A real bundle is ingested and reloaded through zipline's loader;
+    # only its close() is stripped, by rewrapping the loaded readers and
+    # asset finder in the closeless shape above. The rebuild reads the
+    # real bars through that object, so a cleanup that assumes close()
+    # fails here exactly as it did in the live returning-user run.
+    monkeypatch.setenv("ZIPLINE_ROOT", str(tmp_path))
+    sessions, closes = _write_synthetic_bundle("closeless_bundle", stale=True)
+    real_load = bundles.load
+
+    def load_without_close(name, environ, timestamp=None):
+        return _BundleWithoutClose(*real_load(name, environ, timestamp))
+
+    monkeypatch.setattr(bundles, "load", load_without_close)
+    try:
+        assert bundle_dates_misaligned("closeless_bundle", os.environ)
+
+        assert ensure_session_aligned_bundle("closeless_bundle", os.environ) is True
+
+        assert not bundle_dates_misaligned("closeless_bundle", os.environ)
+        assert bundle_version("closeless_bundle", os.environ) == SESSION_ALIGNED_BUNDLE_VERSION
+        bundle = bundles.load("closeless_bundle", os.environ, None)
+        asset = bundle.asset_finder.lookup_symbol("SPY", as_of_date=None)
+        loaded = bundle.equity_daily_bar_reader.load_raw_arrays(["close"], sessions[0], sessions[-1], [asset])[0][:, 0]
+        assert list(loaded) == pytest.approx(closes)
+
+        assert ensure_session_aligned_bundle("closeless_bundle", os.environ) is False
+    finally:
+        bundles.unregister("closeless_bundle")
+
+
+def test_failed_rebuild_tells_the_user_to_recreate_the_backtest(tmp_path):
+    environ = _bundle_environ(tmp_path, "broken_bundle", "2023-01-03 14:30")
+
+    def failing_rebuild(_name, _environ):
+        raise AttributeError("'BundleData' object has no attribute 'close'")
+
+    with pytest.raises(RuntimeError) as raised:
+        ensure_session_aligned_bundle("broken_bundle", environ, rebuild=failing_rebuild)
+
+    message = str(raised.value)
+    assert "fbull backtest delete broken_bundle" in message
+    assert "fbull backtest create" in message
+    assert "BundleData" not in message
+    assert "close" not in message
+    assert isinstance(raised.value.__cause__, AttributeError)

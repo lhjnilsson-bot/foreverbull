@@ -122,6 +122,25 @@ def _read_equity_metadata(db_path: Path) -> pd.DataFrame:
     return metadata
 
 
+def _close_bundle(bundle: Any) -> None:
+    """Close a loaded bundle, tolerating bundles without a close method.
+
+    Some zipline-reloaded builds return a BundleData namedtuple with no
+    close() of its own. Its asset finder and adjustment reader still hold
+    an engine and a connection that need closing, which is exactly what
+    BundleData.close() does on builds that provide it, so close those
+    directly when the bundle itself cannot.
+    """
+    close = getattr(bundle, "close", None)
+    if callable(close):
+        close()
+        return
+    for resource in (bundle.asset_finder, bundle.adjustment_reader):
+        resource_close = getattr(resource, "close", None)
+        if callable(resource_close):
+            resource_close()
+
+
 def rebuild_session_aligned_bundle(bundle_name: str, environ: Mapping[str, Any] | None = None) -> None:
     """Re-ingest a bundle from its own bars, keyed on session labels.
 
@@ -166,7 +185,7 @@ def rebuild_session_aligned_bundle(bundle_name: str, environ: Mapping[str, Any] 
                 index=pd.DatetimeIndex(sessions),
             )
     finally:
-        old_bundle.close()
+        _close_bundle(old_bundle)
 
     def reingest(
         _environ,
@@ -214,6 +233,10 @@ def ensure_session_aligned_bundle(
     try:
         rebuild_bundle(bundle_name, environ)
     except Exception as error:
-        raise RuntimeError(f"rebuilding the stale bundle {bundle_name!r} for this run failed: {error}") from error
+        raise RuntimeError(
+            f"Could not update the backtest {bundle_name!r} for this run. "
+            f"Delete it with `fbull backtest delete {bundle_name}` and create it again "
+            "with `fbull backtest create`, then run it again."
+        ) from error
     stamp_bundle_version(bundle_name, environ=environ)
     return True
