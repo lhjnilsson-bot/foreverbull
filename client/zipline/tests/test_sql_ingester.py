@@ -156,6 +156,30 @@ def test_group_symbols_by_instrument_keeps_rename_on_one_sid():
     assert oef.member_to is None
 
 
+def test_group_symbols_by_instrument_follows_the_final_membership_interval():
+    # One row per ticker and membership interval: AAPL dropped on 01-31 and
+    # added back on 02-28. The rows come back in either interval order.
+    def group(member_to: list[date | None]):
+        aliases = pd.DataFrame(
+            {
+                "isin": [AAPL_ISIN] * len(member_to),
+                "symbol": ["AAPL"] * len(member_to),
+                "from_date": [date(2022, 12, 31)] * len(member_to),
+                "to_date": [None] * len(member_to),
+                "member_to": member_to,
+            }
+        )
+        groups = group_symbols_by_instrument(["AAPL"], aliases)
+        assert len(groups) == 1
+        assert [alias.symbol for alias in groups[0].aliases] == ["AAPL"]
+        return groups[0].member_to
+
+    assert group([date(2023, 1, 31), None]) is None
+    assert group([None, date(2023, 1, 31)]) is None
+    assert group([date(2023, 1, 31), date(2023, 3, 15)]) == date(2023, 3, 15)
+    assert group([date(2023, 3, 15), date(2023, 1, 31)]) == date(2023, 3, 15)
+
+
 def test_sql_ingester_one_sid_for_ticker_change_and_autoclose_on_drop():
     engine = FakeEngine(
         {

@@ -42,7 +42,7 @@ class AliasSpec:
 
 @dataclass(frozen=True)
 class InstrumentGroup:
-    """One Zipline sid. FB then META is one group; a drop sets member_to."""
+    """One Zipline sid. FB then META is one group; the final drop sets member_to."""
 
     aliases: tuple[AliasSpec, ...]
     member_to: date | None = None
@@ -159,17 +159,20 @@ def group_symbols_by_instrument(
         return [InstrumentGroup(aliases=(AliasSpec(symbol=symbol),)) for symbol in wanted]
 
     by_isin: dict[str, list[AliasSpec]] = {}
-    member_to: dict[str, date | None] = {}
+    drops: dict[str, list[date | None]] = {}
     symbol_isin: dict[str, str] = {}
     # itertuples is typed as a plain tuple; the names are the query columns.
+    # A row is one ticker of an ISIN in one membership interval, so a member
+    # that was dropped and re-added lists each ticker once per interval.
     for row in cast(Iterable[Any], aliases.itertuples(index=False)):
         isin = str(row.isin)
         symbol = str(row.symbol)
         from_date = _as_date(getattr(row, "from_date", None))
         to_date = _as_date(getattr(row, "to_date", None))
-        dropped = _as_date(getattr(row, "member_to", None))
-        by_isin.setdefault(isin, []).append(AliasSpec(symbol=symbol, from_date=from_date, to_date=to_date))
-        member_to[isin] = dropped
+        alias = AliasSpec(symbol=symbol, from_date=from_date, to_date=to_date)
+        if alias not in by_isin.setdefault(isin, []):
+            by_isin[isin].append(alias)
+        drops.setdefault(isin, []).append(_as_date(getattr(row, "member_to", None)))
         symbol_isin[symbol] = isin
 
     groups: list[InstrumentGroup] = []
@@ -182,8 +185,20 @@ def group_symbols_by_instrument(
         if isin in seen_isins:
             continue
         seen_isins.add(isin)
-        groups.append(InstrumentGroup(aliases=tuple(by_isin[isin]), member_to=member_to.get(isin)))
+        groups.append(InstrumentGroup(aliases=tuple(by_isin[isin]), member_to=final_drop(drops[isin])))
     return groups
+
+
+def final_drop(drops: list[date | None]) -> date | None:
+    """The end of a member's final membership interval, None while still a member.
+
+    Intervals of one ISIN do not overlap, so the final one is the open one,
+    else the one that ends last. An earlier drop is not where the member
+    leaves the universe when it is added back later.
+    """
+    if any(dropped is None for dropped in drops):
+        return None
+    return max(cast(list[date], drops))
 
 
 def _as_date(value) -> date | None:
