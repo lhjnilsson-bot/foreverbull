@@ -5,9 +5,13 @@ import (
 	"fmt"
 
 	"github.com/lhjnilsson/foreverbull/internal/stream"
+	"github.com/lhjnilsson/foreverbull/internal/usercopy"
 	st "github.com/lhjnilsson/foreverbull/pkg/service/stream"
 )
 
+// InstanceInterview, InstanceSanityCheck, and InstanceStop have no
+// implementation. Each answers Unimplemented so a caller never reads it as
+// done.
 func InstanceInterview(ctx context.Context, message stream.Message) error {
 	var instance st.InstanceInterviewCommand
 
@@ -35,7 +39,7 @@ func InstanceInterview(ctx context.Context, message stream.Message) error {
 			}
 		}
 	*/
-	return nil
+	return unimplemented(usercopy.InterviewUnimplemented)
 }
 
 func InstanceSanityCheck(ctx context.Context, message stream.Message) error {
@@ -97,7 +101,7 @@ func InstanceSanityCheck(ctx context.Context, message stream.Message) error {
 			return fmt.Errorf("error while checking for instances to come online: %w", err)
 		}
 	*/
-	return nil
+	return unimplemented(usercopy.SanityCheckUnimplemented)
 }
 
 func InstanceStop(ctx context.Context, message stream.Message) error {
@@ -114,5 +118,5 @@ func InstanceStop(ctx context.Context, message stream.Message) error {
 			return err
 		}
 	*/
-	return nil
+	return unimplemented(usercopy.InstanceStopUnimplemented)
 }
