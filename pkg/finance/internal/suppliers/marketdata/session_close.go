@@ -128,10 +128,41 @@ func LastCompletedSessionDate(now time.Time) time.Time {
 // message that says nothing has closed yet uses it, so the time it names is
 // the one the fetches stop at.
 func NoClosedSessionReason(start, end time.Time) string {
-	return fmt.Sprintf("no trading session between %s and %s has closed yet "+
-		"(sessions count as closed at %d:%02d New York time)",
-		start.UTC().Format(time.DateOnly), end.UTC().Format(time.DateOnly),
-		int(sessionFinalAt/time.Hour), int(sessionFinalAt%time.Hour/time.Minute))
+	return noClosedSessionReason(start, end, sessionFinalAt)
+}
+
+func noClosedSessionReason(start, end time.Time, finalAt time.Duration) string {
+	return fmt.Sprintf("no trading session between %s and %s has closed yet (%s)",
+		start.UTC().Format(time.DateOnly), end.UTC().Format(time.DateOnly), closedAtRule(finalAt))
+}
+
+// UnclosedSessionsNotice says that the sessions from first to last, both
+// dates, were left out of a backtest because they haven't closed yet, and
+// when a session counts as closed, read from sessionFinalAt like
+// NoClosedSessionReason. One date: "2026-10-30 isn't included because its
+// trading session hasn't closed yet (sessions count as closed at 16:30 New
+// York time)." Two dates: "2026-10-29 to 2026-10-30 aren't included
+// because their trading sessions haven't closed yet (…)."
+func UnclosedSessionsNotice(first, last time.Time) string {
+	return unclosedSessionsNotice(first, last, sessionFinalAt)
+}
+
+func unclosedSessionsNotice(first, last time.Time, finalAt time.Duration) string {
+	from, to := first.UTC().Format(time.DateOnly), last.UTC().Format(time.DateOnly)
+	if from == to {
+		return fmt.Sprintf("%s isn't included because its trading session hasn't closed yet (%s).",
+			from, closedAtRule(finalAt))
+	}
+	return fmt.Sprintf("%s to %s aren't included because their trading sessions haven't closed yet (%s).",
+		from, to, closedAtRule(finalAt))
+}
+
+// closedAtRule is the clause every sentence about an unclosed session
+// ends with, so none of them can name another time than the fetches stop
+// at: "sessions count as closed at 16:30 New York time".
+func closedAtRule(finalAt time.Duration) string {
+	return fmt.Sprintf("sessions count as closed at %d:%02d New York time",
+		int(finalAt/time.Hour), int(finalAt%time.Hour/time.Minute))
 }
 
 // afterLastSession is true for a bar whose session date comes after last,

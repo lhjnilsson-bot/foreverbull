@@ -39,3 +39,12 @@ func LastCompletedSessionDate(now time.Time) time.Time {
 func NoClosedSessionReason(start, end time.Time) string {
 	return marketdata.NoClosedSessionReason(start, end)
 }
+
+// UnclosedSessionsNotice says that the sessions from first to last were
+// left out of a backtest because they haven't closed yet, with the same
+// closing time as NoClosedSessionReason: "2026-10-30 isn't included because
+// its trading session hasn't closed yet (sessions count as closed at 16:30
+// New York time)."
+func UnclosedSessionsNotice(first, last time.Time) string {
+	return marketdata.UnclosedSessionsNotice(first, last)
+}
