@@ -32,3 +32,9 @@ func TestDeploymentSentences(t *testing.T) {
 	require.Equal(t, "Couldn't stop deployment 'mean-rev'. Run `fbenv status` to check that the environment is running, "+
 		"then run `fbull strategy stop mean-rev` again.", usercopy.DeploymentStopFailed("mean-rev"))
 }
+
+func TestExecutionBacktestCheckFailed(t *testing.T) {
+	require.Equal(t, "Couldn't check your access to backtest 'spy' for execution e-1. "+
+		"Run `fbenv status` to check that the environment is running, then try again.",
+		usercopy.ExecutionBacktestCheckFailed("e-1", "spy"))
+}
