@@ -84,7 +84,9 @@ func TestRunBacktestLeavesOutMemberAfterItsLastBar(t *testing.T) {
 		backtests: fakeBacktests{backtest: &pb.Backtest{
 			Name: "sp100", Benchmark: "OEF",
 			Periods: []*pb.Backtest_Period{{StartDate: date(2026, 1, 1), EndDate: date(2026, 4, 30)}},
-		}},
+		}, events: []repository.SymbolEvent{{
+			Symbol: "ABC", Kind: repository.EventDelisted, On: day(2026, 3, 31), Evidence: "alpaca asset status inactive",
+		}}},
 	}
 
 	ch, err := session.RunBacktest(context.Background(), &pb.Execution{Backtest: "sp100"}, pool)
@@ -94,7 +96,7 @@ func TestRunBacktestLeavesOutMemberAfterItsLastBar(t *testing.T) {
 
 	require.Equal(t, "yahoo", provider)
 	require.Equal(t, day(2026, 5, 1), end)
-	require.Equal(t, []string{"1 symbol had no prices after 2026-03-31 and was left out: ABC."}, session.RunNotices())
+	require.Equal(t, []string{"1 symbol was delisted after its last price on 2026-03-31 and was left out: ABC."}, session.RunNotices())
 }
 
 // The run asks for sessions past the newest stored bar, e.g. a provider that
@@ -144,7 +146,9 @@ func TestRunBacktestKeepsMembersWhoseLastBarIsTheNewestData(t *testing.T) {
 		backtests: fakeBacktests{backtest: &pb.Backtest{
 			Name: "sp100", Benchmark: "OEF",
 			Periods: []*pb.Backtest_Period{{StartDate: date(2026, 1, 1), EndDate: date(2026, 4, 30)}},
-		}},
+		}, events: []repository.SymbolEvent{{
+			Symbol: "ABC", Kind: repository.EventDelisted, On: day(2026, 4, 28), Evidence: "alpaca asset status inactive",
+		}}},
 	}
 
 	ch, err := session.RunBacktest(context.Background(), &pb.Execution{Backtest: "sp100"}, pool)
@@ -152,7 +156,7 @@ func TestRunBacktestKeepsMembersWhoseLastBarIsTheNewestData(t *testing.T) {
 	drain(t, ch)
 	require.NoError(t, session.RunFailure())
 
-	require.Equal(t, []string{"1 symbol had no prices after 2026-04-28 and was left out: ABC."}, session.RunNotices())
+	require.Equal(t, []string{"1 symbol was delisted after its last price on 2026-04-28 and was left out: ABC."}, session.RunNotices())
 }
 
 func TestWithoutEndedPricesLeavesNothingOutWhenEveryBarEndsTogether(t *testing.T) {
@@ -166,7 +170,7 @@ func TestWithoutEndedPricesLeavesNothingOutWhenEveryBarEndsTogether(t *testing.T
 	left := newLeftOut()
 	source := withoutEndedPrices(func(context.Context, time.Time) ([]string, error) {
 		return []string{"AAPL", "MSFT"}, nil
-	}, aliases, left)
+	}, aliases, left, nil)
 
 	symbols, err := source(context.Background(), day(2026, 4, 30))
 	require.NoError(t, err)
@@ -230,6 +234,9 @@ func TestRunBacktestNoticeSaysHeldPositionsWereClosed(t *testing.T) {
 		backtests: fakeBacktests{backtest: &pb.Backtest{
 			Name: "sp100", Benchmark: "OEF",
 			Periods: []*pb.Backtest_Period{{StartDate: date(2026, 1, 1), EndDate: date(2026, 4, 30)}},
+		}, events: []repository.SymbolEvent{
+			{Symbol: "ABC", Kind: repository.EventDelisted, On: day(2026, 3, 31), Evidence: "alpaca asset status inactive"},
+			{Symbol: "XYZ", Kind: repository.EventDelisted, On: day(2026, 4, 1), Evidence: "alpaca asset status inactive"},
 		}},
 	}
 
@@ -239,8 +246,8 @@ func TestRunBacktestNoticeSaysHeldPositionsWereClosed(t *testing.T) {
 	require.NoError(t, session.RunFailure())
 
 	require.Equal(t, []string{
-		"1 symbol had no prices after 2026-03-31 and was left out: ABC. Positions held were closed at the last price on 2026-03-31.",
-		"1 symbol had no prices after 2026-04-01 and was left out: XYZ.",
+		"1 symbol was delisted after its last price on 2026-03-31 and was left out: ABC. Positions held were closed at the last price on 2026-03-31.",
+		"1 symbol was delisted after its last price on 2026-04-01 and was left out: XYZ.",
 	}, session.RunNotices())
 }
 
@@ -254,8 +261,8 @@ func TestLeftOutNoticesSayClosedOnlyOnLinesWithAHeldSymbol(t *testing.T) {
 	left.held["DEF"] = true
 
 	require.Equal(t, []string{
-		"2 symbols had no prices after 2026-03-31 and were left out: ABC, DEF. Positions held were closed at the last price on 2026-03-31.",
-		"1 symbol had no prices after 2026-04-15 and was left out: XYZ.",
+		"2 symbols were delisted after their last price on 2026-03-31 and were left out: ABC, DEF. Positions held were closed at the last price on 2026-03-31.",
+		"1 symbol was delisted after its last price on 2026-04-15 and was left out: XYZ.",
 	}, left.notices())
 }
 
@@ -268,6 +275,38 @@ func TestSawPortfolioKeepsOnlyThisSessionsOpenPositions(t *testing.T) {
 	left.sawPortfolio(&finance.Portfolio{})
 	require.Empty(t, left.holding)
 	(*leftOut)(nil).sawPortfolio(&finance.Portfolio{})
+}
+
+func TestWithoutEndedPricesKeepsASymbolWhoseBarsEndedWithoutEvidence(t *testing.T) {
+	t.Parallel()
+
+	last := day(2026, 3, 31)
+	aliases := []repository.AliasLastBar{
+		{Symbol: "AAPL", FromDate: day(2026, 1, 1), LastBar: ptr(day(2026, 4, 30))},
+		{Symbol: "ABC", FromDate: day(2026, 1, 1), LastBar: ptr(last)},
+	}
+	left := newLeftOut()
+	source := withoutEndedPrices(func(context.Context, time.Time) ([]string, error) {
+		return []string{"AAPL", "ABC"}, nil
+	}, aliases, left, nil)
+
+	symbols, err := source(context.Background(), day(2026, 4, 1))
+	require.NoError(t, err)
+	require.Equal(t, []string{"AAPL", "ABC"}, symbols)
+	require.Empty(t, left.notices())
+}
+
+func TestCoverageNoticesShowsAListingNextToAnAutoClose(t *testing.T) {
+	t.Parallel()
+
+	events := []repository.SymbolEvent{
+		{Symbol: "OLD", Kind: repository.EventDelisted, On: day(2024, 3, 1), Evidence: "alpaca asset status inactive"},
+		{Symbol: "XYZ", Kind: repository.EventListed, On: day(2024, 3, 15), Evidence: "yahoo firstTradeDate 2024-03-15"},
+	}
+	require.Equal(t, []string{
+		"1 symbol was delisted after its last price on 2024-03-01 and was left out: OLD.",
+		"XYZ was listed on 2024-03-15 and has no prices before then.",
+	}, coverageNotices(events, nil))
 }
 
 func TestRunNoticesEmptyWhenNothingWasLeftOut(t *testing.T) {
@@ -286,8 +325,8 @@ func TestLeftOutNoticesUseOneLinePerLastPriceDate(t *testing.T) {
 	left.lastBar["DEF"] = day(2026, 3, 31)
 
 	require.Equal(t, []string{
-		"3 symbols had no prices after 2026-03-31 and were left out: ABC, DEF, GHI.",
-		"1 symbol had no prices after 2026-04-15 and was left out: XYZ.",
+		"3 symbols were delisted after their last price on 2026-03-31 and were left out: ABC, DEF, GHI.",
+		"1 symbol was delisted after its last price on 2026-04-15 and was left out: XYZ.",
 	}, left.notices())
 }
 

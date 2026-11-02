@@ -12,13 +12,13 @@ from foreverbull_cli.output import execution_link
 
 
 # The broker stores one complete line per last-price date in
-# Execution.notices, e.g. "3 symbols had no prices after 2026-03-31 and were
-# left out: ABC, DEF, GHI.", ending "Positions held were closed at the last
-# price on 2026-03-31." when the run held one of them. The web UI reads the same
-# lines, so the CLI folds them only when it prints.
+# Execution.notices, e.g. "3 symbols were delisted after their last price on
+# 2026-03-31 and were left out: ABC, DEF, GHI.", ending "Positions held were
+# closed at the last price on 2026-03-31." when the run held one of them. The
+# web UI reads the same lines, so the CLI folds them only when it prints.
 _LEFT_OUT_LINE = re.compile(
-    r"^(?P<count>\d+) symbols? had no prices after (?P<date>\d{4}-\d{2}-\d{2}) "
-    r"and (?:was|were) left out: (?P<symbols>.+?)\."
+    r"^(?P<count>\d+) symbols? (?:was delisted after its|were delisted after their) last price on "
+    r"(?P<date>\d{4}-\d{2}-\d{2}) and (?:was|were) left out: (?P<symbols>.+?)\."
     r"(?P<held> Positions held were closed at the last price on \d{4}-\d{2}-\d{2}\.)?$"
 )
 # One line names at most this many symbols, then "and N more".
@@ -34,8 +34,8 @@ def _left_out_line(count: int, last_date: str, symbols: list[str], held: str) ->
     if hidden > 0:
         shown = f"{shown} and {hidden} more"
     if count == 1:
-        return f"1 symbol had no prices after {last_date} and was left out: {shown}.{held}"
-    return f"{count} symbols had no prices after {last_date} and were left out: {shown}.{held}"
+        return f"1 symbol was delisted after its last price on {last_date} and was left out: {shown}.{held}"
+    return f"{count} symbols were delisted after their last price on {last_date} and were left out: {shown}.{held}"
 
 
 def run_notice_lines(notices: list[str], *, verbose: bool) -> list[str]:
@@ -63,7 +63,7 @@ def run_notice_lines(notices: list[str], *, verbose: bool) -> list[str]:
         ]
         return [*shown, *other]
     total = sum(int(match["count"]) for match in left_out)
-    summary = f"{total} symbols had no prices before the run ended and were left out."
+    summary = f"{total} symbols were delisted before the run ended and were left out."
     if any(match["held"] for match in left_out):
         # A position Zipline auto-closed is a trade the strategy never placed.
         summary = f"{summary} Positions held were closed at their last price."

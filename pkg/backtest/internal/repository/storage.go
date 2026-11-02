@@ -8,6 +8,10 @@ import (
 )
 
 func Recreate(ctx context.Context, conn *pgxpool.Pool) error { //nolint: cyclop
+	if _, err := conn.Exec(ctx, `DROP TABLE IF EXISTS backtest_symbol_event;`); err != nil {
+		return fmt.Errorf("failed to drop table backtest_symbol_event: %w", err)
+	}
+
 	if _, err := conn.Exec(ctx, `DROP TABLE IF EXISTS universe_member;`); err != nil {
 		return fmt.Errorf("failed to drop table universe_member: %w", err)
 	}
@@ -64,6 +68,10 @@ func Recreate(ctx context.Context, conn *pgxpool.Pool) error { //nolint: cyclop
 		return err
 	}
 
+	if err := createSymbolEvents(ctx, conn); err != nil {
+		return err
+	}
+
 	if err := createIdentityTables(ctx, conn); err != nil {
 		return err
 	}
@@ -115,6 +123,10 @@ func CreateTables(ctx context.Context, conn *pgxpool.Pool) error {
 	}
 
 	if err := MigrateBacktestProvider(ctx, conn); err != nil {
+		return err
+	}
+
+	if err := createSymbolEvents(ctx, conn); err != nil {
 		return err
 	}
 

@@ -785,8 +785,8 @@ func DownloadFinancialData(ctx context.Context, msg stream.Message) error {
 		progress.symbolDone()
 	}
 
-	return checkMissingSessions(ctx, db, backtests, command.BacktestName, backtestID,
-		strings.ToLower(provider), symbols, reported, period)
+	return checkMissingSessions(ctx, msg, db, backtests, command.BacktestName, backtestID,
+		strings.ToLower(provider), b.GetProfile(), symbols, reported, period)
 }
 
 // isNoPriceDataError reports the finance service's no-bars STATUS_ERROR.

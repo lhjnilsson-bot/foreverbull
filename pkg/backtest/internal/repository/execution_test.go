@@ -440,7 +440,7 @@ func (test *ExecutionTest) TestNoticesRoundTrip() {
 	test.Require().NoError(err)
 	test.Empty(notices)
 
-	line := "3 symbols had no prices after 2026-03-31 and were left out: ABC, DEF, GHI."
+	line := "3 symbols were delisted after their last price on 2026-03-31 and were left out: ABC, DEF, GHI."
 	test.Require().NoError(test.uut.SetNotices(ctx, execution.Id, []string{line}))
 	notices, err = test.uut.GetNotices(ctx, execution.Id)
 	test.Require().NoError(err)

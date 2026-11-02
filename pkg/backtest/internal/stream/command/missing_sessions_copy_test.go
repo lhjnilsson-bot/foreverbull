@@ -19,8 +19,8 @@ func copyDay(t *testing.T, value string) time.Time {
 func TestMissingSessionsMessageStartGap(t *testing.T) {
 	t.Parallel()
 	gaps := []symbolGaps{{symbol: "NEWCO", noneBefore: copyDay(t, "2024-02-15")}}
-	require.Equal(t, "Couldn't load data for backtest 'demo': NEWCO has no prices before 2024-02-15. "+
-		"foreverbull doesn't store listing or delisting dates yet, so it can't tell a late listing from missing data. "+
+	require.Equal(t, "Couldn't load data for backtest 'demo': NEWCO has no prices before 2024-02-15, and "+
+		"yahoo didn't confirm it was listed then, so foreverbull treats it as missing data. "+
 		"The backtest wasn't saved. "+
 		"Choose a start on or after 2024-02-15, or remove NEWCO, then run `fbull backtest create` again.",
 		missingSessionsMessage("demo", "yahoo", nil, gaps, true))
@@ -30,8 +30,8 @@ func TestMissingSessionsMessageStartGap(t *testing.T) {
 func TestMissingSessionsMessageEndGap(t *testing.T) {
 	t.Parallel()
 	gaps := []symbolGaps{{symbol: "OLDCO", noneAfter: copyDay(t, "2024-03-27")}}
-	require.Equal(t, "Couldn't load data for backtest 'demo': OLDCO has no prices after 2024-03-27. "+
-		"foreverbull doesn't store listing or delisting dates yet, so it can't tell a delisting from missing data. "+
+	require.Equal(t, "Couldn't load data for backtest 'demo': OLDCO has no prices after 2024-03-27, and "+
+		"yahoo didn't confirm it was delisted then, so foreverbull treats it as missing data. "+
 		"The backtest wasn't saved. "+
 		"Choose an end on or before 2024-03-27, or remove OLDCO, then run `fbull backtest create` again.",
 		missingSessionsMessage("demo", "yahoo", nil, gaps, true))
@@ -43,15 +43,15 @@ func TestMissingSessionsMessageEndGap(t *testing.T) {
 func TestMissingSessionsMessageNotRemoved(t *testing.T) {
 	t.Parallel()
 	start := []symbolGaps{{symbol: "NEWCO", noneBefore: copyDay(t, "2024-02-15")}}
-	require.Equal(t, "Couldn't load data for backtest 'oef-2024q1': NEWCO has no prices before 2024-02-15. "+
-		"foreverbull doesn't store listing or delisting dates yet, so it can't tell a late listing from missing data. "+
+	require.Equal(t, "Couldn't load data for backtest 'oef-2024q1': NEWCO has no prices before 2024-02-15, and "+
+		"yahoo didn't confirm it was listed then, so foreverbull treats it as missing data. "+
 		"The backtest was partly saved and couldn't be removed. Run `fbull backtest delete oef-2024q1` first. "+
 		"Choose a start on or after 2024-02-15, or remove NEWCO, then run `fbull backtest create` again.",
 		missingSessionsMessage("oef-2024q1", "yahoo", nil, start, false))
 
 	end := []symbolGaps{{symbol: "OLDCO", noneAfter: copyDay(t, "2024-03-27")}}
-	require.Equal(t, "Couldn't load data for backtest 'oef-2024q1': OLDCO has no prices after 2024-03-27. "+
-		"foreverbull doesn't store listing or delisting dates yet, so it can't tell a delisting from missing data. "+
+	require.Equal(t, "Couldn't load data for backtest 'oef-2024q1': OLDCO has no prices after 2024-03-27, and "+
+		"yahoo didn't confirm it was delisted then, so foreverbull treats it as missing data. "+
 		"The backtest was partly saved and couldn't be removed. Run `fbull backtest delete oef-2024q1` first. "+
 		"Choose an end on or before 2024-03-27, or remove OLDCO, then run `fbull backtest create` again.",
 		missingSessionsMessage("oef-2024q1", "yahoo", nil, end, false))
@@ -63,7 +63,7 @@ func TestMissingSessionsMessageNotRemoved(t *testing.T) {
 		"2 symbols. The backtest was partly saved and couldn't be removed.\n"+
 		"  AAA: 2024-02-20\n"+
 		"  NEWCO: no prices before 2024-02-20.\n"+
-		"foreverbull doesn't store listing or delisting dates yet, so it can't tell a late listing from missing data. "+
+		"yahoo didn't confirm a listing, so foreverbull treats it as missing data. "+
 		"Run `fbull backtest delete oef-2024q1` first. Try another provider with --provider, or change the "+
 		"backtest dates, then run `fbull backtest create` again.",
 		missingSessionsMessage("oef-2024q1", "yahoo", days, several, false))

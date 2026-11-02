@@ -321,7 +321,7 @@ func (n noticingSession) RunNotices() []string { return n.notices }
 // The run's notices are stored on the execution before the stream ends, so
 // the summary the CLI reads right after names the members left out.
 func (s *SessionTest) TestRunExecutionStoresRunNotices() {
-	line := "1 symbol had no prices after 2024-03-28 and was left out: ABC."
+	line := "1 symbol was delisted after its last price on 2024-03-28 and was left out: ABC."
 	session := noticingSession{MockEngineSession: new(engine.MockEngineSession), notices: []string{line}}
 	ch := make(chan *servicePb.RunExecutionResponse, 1)
 	ch <- &servicePb.RunExecutionResponse{}
