@@ -54,8 +54,9 @@ func DeploymentStopFailed(strategy string) string {
 }
 
 // ExecutionBacktestCheckFailed is the sentence when the check that the
-// caller may read the backtest of an execution couldn't run. It surfaces
-// only on the GetExperiment API, which no fbull command calls.
+// caller may read the backtest of an execution errored. A denied read is an
+// answer, not this sentence. It surfaces only on the GetExperiment API,
+// which no fbull command calls.
 func ExecutionBacktestCheckFailed(executionID, backtest string) string {
-	return fmt.Sprintf("Couldn't check that execution %s belongs to backtest '%s'. %s", executionID, backtest, RetryStep(""))
+	return fmt.Sprintf("Couldn't check your access to backtest '%s' for execution %s. %s", backtest, executionID, RetryStep(""))
 }

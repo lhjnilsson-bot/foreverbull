@@ -10,6 +10,7 @@ import (
 
 	"github.com/lhjnilsson/foreverbull/internal/auth"
 	"github.com/lhjnilsson/foreverbull/internal/environment"
+	"github.com/lhjnilsson/foreverbull/internal/postgres"
 	"github.com/lhjnilsson/foreverbull/internal/usercopy"
 	common "github.com/lhjnilsson/foreverbull/pkg/pb"
 	service "github.com/lhjnilsson/foreverbull/pkg/pb/service"
@@ -197,7 +198,12 @@ func (s *StrategyServer) getExperimentAuthed(ctx context.Context, req *servicePb
 		return nil, status.Errorf(codes.Internal, "grafana link: %v", err)
 	}
 	rsp.GrafanaPath = &path
-	if !s.executionBacktestVisible(ctx, account, experiment.GetExecutionId()) {
+	visible, err := executionBacktestVisible(ctx, s.pgx, account, experiment.GetExecutionId())
+	if err != nil {
+		log.Error().Err(err).Str("execution", experiment.GetExecutionId()).Msg("error checking access to the execution's backtest")
+		return nil, status.Error(codes.Internal, usercopy.ExecutionBacktestCheckFailed(experiment.GetExecutionId(), experiment.GetBacktestName()))
+	}
+	if !visible {
 		return rsp, nil
 	}
 	lastPeriod, err := experiments.GetLastPeriod(ctx, experiment.GetExecutionId())
@@ -208,17 +214,34 @@ func (s *StrategyServer) getExperimentAuthed(ctx context.Context, req *servicePb
 	return rsp, nil
 }
 
-func (s *StrategyServer) executionBacktestVisible(ctx context.Context, account auth.Account, executionID string) bool {
+// executionBacktestVisible reports whether the caller may read the backtest
+// behind an execution. An execution with no session row, or a backtest the
+// caller can't see, is an answer: not visible. A failed read is an error, not
+// "not visible", so the last period isn't hidden by a database fault.
+func executionBacktestVisible(ctx context.Context, db postgres.Query, account auth.Account, executionID string) (bool, error) {
 	var backtestID string
-	err := s.pgx.QueryRow(ctx, `
+	err := db.QueryRow(ctx, `
 		SELECT session.backtest_id
 		FROM backtest_execution
 		JOIN session ON session.id = backtest_execution.session
 		WHERE backtest_execution.id = $1`, executionID).Scan(&backtestID)
-	if err != nil || backtestID == "" {
-		return false
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
 	}
-	return auth.Can(ctx, s.pgx, account, auth.DomainBacktest, backtestID, auth.ActionRead) == nil
+	if err != nil {
+		return false, fmt.Errorf("read backtest of execution %s: %w", executionID, err)
+	}
+	if backtestID == "" {
+		return false, nil
+	}
+	err = auth.Can(ctx, db, account, auth.DomainBacktest, backtestID, auth.ActionRead)
+	if errors.Is(err, auth.ErrNotFound) || errors.Is(err, auth.ErrForbidden) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check access to backtest %s: %w", backtestID, err)
+	}
+	return true, nil
 }
 
 func (s *StrategyServer) listExperimentsAuthed(ctx context.Context, req *servicePb.ListExperimentsRequest) (*servicePb.ListExperimentsResponse, error) {
