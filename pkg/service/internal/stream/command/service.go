@@ -9,15 +9,30 @@ import (
 	"github.com/lhjnilsson/foreverbull/internal/environment"
 	"github.com/lhjnilsson/foreverbull/internal/postgres"
 	"github.com/lhjnilsson/foreverbull/internal/stream"
+	"github.com/lhjnilsson/foreverbull/internal/usercopy"
 	"github.com/lhjnilsson/foreverbull/pkg/backtest"
 	backtestpb "github.com/lhjnilsson/foreverbull/pkg/pb/backtest"
 	"github.com/lhjnilsson/foreverbull/pkg/service/internal/repository"
 	"github.com/lhjnilsson/foreverbull/pkg/service/internal/stream/dependency"
 	ss "github.com/lhjnilsson/foreverbull/pkg/service/stream"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
+// unimplemented is a command with no implementation. Its text is the plain
+// sentence, which a command's ERROR state carries as is, and it still reads
+// as gRPC Unimplemented.
+type unimplemented string
+
+func (e unimplemented) Error() string { return string(e) }
+
+// GRPCStatus is the error's status for status.FromError and status.Code.
+func (e unimplemented) GRPCStatus() *status.Status { return status.New(codes.Unimplemented, string(e)) }
+
+// UpdateServiceStatus has no implementation. It answers Unimplemented so a
+// caller never reads the status as updated.
 func UpdateServiceStatus(ctx context.Context, message stream.Message) error {
-	return nil
+	return unimplemented(usercopy.ServiceStatusUnimplemented)
 }
 
 func ServiceStart(ctx context.Context, message stream.Message) error {
