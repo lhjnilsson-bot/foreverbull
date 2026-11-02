@@ -6,12 +6,15 @@ import (
 	"time"
 
 	"github.com/lhjnilsson/foreverbull/internal/auth"
+	"github.com/lhjnilsson/foreverbull/internal/usercopy"
 	"github.com/lhjnilsson/foreverbull/pkg/finance/supplier"
 	pb "github.com/lhjnilsson/foreverbull/pkg/pb/finance"
 	servicePb "github.com/lhjnilsson/foreverbull/pkg/pb/finance/service"
 	"github.com/lhjnilsson/foreverbull/pkg/service/worker"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type grpcSessionServer struct {
@@ -27,6 +30,9 @@ type grpcSessionServer struct {
 
 	bars     worker.BarSource
 	provider string
+
+	// sessionID names the trading session in the user's sentences.
+	sessionID string
 }
 
 type sessionOption func(*grpcSessionServer)
@@ -37,6 +43,13 @@ func WithBars(source worker.BarSource, provider string) sessionOption {
 	return func(gs *grpcSessionServer) {
 		gs.bars = source
 		gs.provider = provider
+	}
+}
+
+// WithSessionID names the trading session the server runs.
+func WithSessionID(id string) sessionOption {
+	return func(gs *grpcSessionServer) {
+		gs.sessionID = id
 	}
 }
 
@@ -120,11 +133,17 @@ func (gs *grpcSessionServer) PlaceOrders(ctx context.Context, req *servicePb.Pla
 }
 
 func (gs *grpcSessionServer) StopServer(ctx context.Context, req *servicePb.StopServerRequest) (*servicePb.StopServerResponse, error) {
+	var closeErr error
 	if gs.wp != nil {
-		if err := gs.wp.Close(); err != nil {
-			log.Error().Err(err).Msg("error closing worker pool")
-		}
+		closeErr = gs.wp.Close()
 	}
+	// The session server stops either way; a pool that didn't close is
+	// still the caller's failure.
 	close(gs.activity)
+	if closeErr != nil {
+		// The socket error names local addresses, so it goes to the log.
+		log.Error().Err(closeErr).Str("session", gs.sessionID).Msg("error closing worker pool")
+		return nil, status.Error(codes.Internal, usercopy.TradingSessionStopFailed(gs.sessionID))
+	}
 	return &servicePb.StopServerResponse{}, nil
 }

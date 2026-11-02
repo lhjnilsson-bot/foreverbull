@@ -51,9 +51,9 @@ func SessionRun(ctx context.Context, msg stream.Message) error {
 		if !ok {
 			return fmt.Errorf("%s is missing", auth.SessionMetadata())
 		}
-		server, activity, err = api.NewSecuredGRPCSessionServer(trading, secret, api.WithBars(bars, supplier.DefaultProvider))
+		server, activity, err = api.NewSecuredGRPCSessionServer(trading, secret, api.WithBars(bars, supplier.DefaultProvider), api.WithSessionID(cmd.Id))
 	} else {
-		server, activity, err = api.NewGRPCSessionServer(trading, api.WithBars(bars, supplier.DefaultProvider))
+		server, activity, err = api.NewGRPCSessionServer(trading, api.WithBars(bars, supplier.DefaultProvider), api.WithSessionID(cmd.Id))
 	}
 	if err != nil {
 		return fmt.Errorf("error creating grpc session server: %w", err)
