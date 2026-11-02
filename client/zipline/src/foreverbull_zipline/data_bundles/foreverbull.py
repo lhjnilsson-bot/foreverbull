@@ -96,6 +96,15 @@ def no_stored_prices_line(
     return "\n".join(lines)
 
 
+def listings_unread_line(backtest: str) -> str:
+    """Ingest's failure when listing and delisting evidence can't be read."""
+    return (
+        f"Couldn't load data for backtest '{backtest}': foreverbull couldn't read "
+        "which symbols were listed or delisted. The backtest wasn't saved. "
+        "Run `fbenv status` to check that the environment is running, then run `fbull backtest create` again."
+    )
+
+
 def ticker_history_line(backtest: str) -> str:
     """Ingest's failure when the record of ticker changes can't be read."""
     return (
@@ -111,22 +120,21 @@ def membership_auto_close_date(
     *,
     newest_member_end,
     bundle_end,
+    delisted: bool = False,
 ):
     """When Zipline closes a held position in this sid at its last close.
 
-    The broker leaves a member out of the run from the session after its
-    last bar only when that bar is before the newest bar of any member
-    (§7.2). Zipline must agree: a delisted member auto-closes the day after
-    its last bar, or on its drop when that is earlier, so the cash is
-    credited the session it is left out. A member whose last bar is the
-    newest member bar is where the stored data ends, not a delisting: it
-    closes only on its drop, otherwise the day after the bundle ends, so a
-    benchmark session no member has does not sell it. A rename does not
-    auto-close the sid: end_date is the ISIN's last bar under any ticker.
+    A confirmed delisting (create stored the evidence) whose last bar is
+    before the newest bar of any member auto-closes the day after that bar,
+    or on its membership drop when that is earlier. Bars ending is not
+    enough: without ``delisted`` the sid closes on its drop, or the day
+    after the bundle ends, so a provider gap does not sell it. A rename
+    does not auto-close the sid: end_date is the ISIN's last bar under any
+    ticker.
     """
     dropped = None if membership_to is None else pd.Timestamp(membership_to)
     last_bar = cast(pd.Timestamp, pd.Timestamp(end_date))
-    if last_bar < cast(pd.Timestamp, pd.Timestamp(newest_member_end)):
+    if delisted and last_bar < cast(pd.Timestamp, pd.Timestamp(newest_member_end)):
         after_last_bar = last_bar + pd.Timedelta(days=1)
         return after_last_bar if dropped is None else min(dropped, after_last_bar)
     if dropped is not None:
@@ -397,12 +405,16 @@ class SQLIngester:
         backtest: backtest_pb.Backtest,
         engine=None,
         aliases: pd.DataFrame | None = None,
+        events: pd.DataFrame | None = None,
     ):
         self.backtest = backtest
         self.engine = engine or DatabaseEngine()
         if hasattr(self.engine, "provider"):
             self.engine.provider = bundle_provider(backtest)
         self._aliases = aliases
+        # None loads backtest_symbol_event. A frame, including an empty one,
+        # is the caller's list and is not read from the database.
+        self._events = events
 
     def create_metadata(self) -> pd.DataFrame:
         return pd.DataFrame(
@@ -445,6 +457,43 @@ class SQLIngester:
                 describe_exception(exc),
             )
             raise PlainSentence(ticker_history_line(self.backtest.name)) from None
+
+    def load_events(self) -> pd.DataFrame:
+        """Confirmed listings and delistings create stored for this backtest.
+
+        A missing engine, or a frame with no kind column, is a failed read.
+        An empty frame that has the kind column is no events.
+        """
+        frame = self._events
+        if frame is None:
+            engine = getattr(self.engine, "_engine", None)
+            if engine is None:
+                raise PlainSentence(listings_unread_line(self.backtest.name))
+            query = text(
+                """SELECT symbol, kind, on_date, evidence
+                     FROM backtest_symbol_event
+                    WHERE backtest_name = :name
+                    ORDER BY on_date, symbol"""
+            )
+            try:
+                frame = read_sql_query(query, engine, params={"name": self.backtest.name})
+            except SQLAlchemyError as exc:
+                _logger.error(
+                    "Couldn't read listing and delisting evidence of backtest %r: %s",
+                    self.backtest.name,
+                    describe_exception(exc),
+                )
+                raise PlainSentence(listings_unread_line(self.backtest.name)) from None
+        if frame is None or "kind" not in frame.columns:
+            raise PlainSentence(listings_unread_line(self.backtest.name))
+        return frame
+
+    def _delisted_symbols(self) -> set[str]:
+        frame = self.load_events()
+        if frame.empty:
+            return set()
+        kind = frame["kind"].astype(str)
+        return set(frame.loc[kind == "delisted", "symbol"].astype(str))
 
     def ingest_groups(self) -> list[InstrumentGroup]:
         return group_symbols_by_instrument(ingest_symbols(self.backtest), self.load_aliases())
@@ -496,9 +545,15 @@ class SQLIngester:
             last for _, last, *_ in ends
         ]
         newest_member_end = max(member_ends)
+        delisted = self._delisted_symbols()
         for index, last, member_to, _, mapping_rows in ends:
+            confirmed = any(symbol in delisted for symbol, _, _ in mapping_rows)
             auto_close = membership_auto_close_date(
-                last, member_to, newest_member_end=newest_member_end, bundle_end=to_date
+                last,
+                member_to,
+                newest_member_end=newest_member_end,
+                bundle_end=to_date,
+                delisted=confirmed,
             )
             for symbol, start_date, end_date in mapping_rows:
                 asset_row = pd.DataFrame(

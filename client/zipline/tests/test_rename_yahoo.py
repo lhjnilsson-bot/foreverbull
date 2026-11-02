@@ -106,7 +106,16 @@ def yahoo_bundle(tmp_path, monkeypatch):
         pd.Timestamp("2021-10-01"),  # type: ignore[arg-type]
         pd.Timestamp("2021-11-30"),  # type: ignore[arg-type]
     )
-    bundles.register(BUNDLE, SQLIngester(_backtest(), engine=YahooOHLC(), aliases=ALIASES), calendar_name="XNYS")
+    bundles.register(
+        BUNDLE,
+        SQLIngester(
+            _backtest(),
+            engine=YahooOHLC(),
+            aliases=ALIASES,
+            events=pd.DataFrame(columns=pd.Index(["symbol", "kind", "on_date", "evidence"])),
+        ),
+        calendar_name="XNYS",
+    )
     try:
         bundles.ingest(BUNDLE, os.environ, pd.Timestamp("2021-12-01", tz="UTC"), [], False)
         yield bundles.load(BUNDLE, os.environ, None), sessions
@@ -257,7 +266,12 @@ def pre_rename_yahoo_bundle(tmp_path, monkeypatch):
     )
     bundles.register(
         PRE_RENAME_BUNDLE,
-        SQLIngester(_pre_rename_backtest(), engine=YahooOHLC(), aliases=PRE_RENAME_ALIASES),
+        SQLIngester(
+            _pre_rename_backtest(),
+            engine=YahooOHLC(),
+            aliases=PRE_RENAME_ALIASES,
+            events=pd.DataFrame(columns=pd.Index(["symbol", "kind", "on_date", "evidence"])),
+        ),
         calendar_name="XNYS",
     )
     try:

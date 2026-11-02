@@ -117,12 +117,30 @@ _OHLC_PROVIDER_KEY = text(
 )
 
 
+# Ingest reads confirmed listings and delistings and fails when it can't,
+# so a test database needs the table even when it holds no rows. No foreign
+# key: this database has no backtest table.
+_SYMBOL_EVENT = text(
+    """
+    CREATE TABLE IF NOT EXISTS backtest_symbol_event (
+        backtest_name text NOT NULL,
+        symbol text NOT NULL,
+        kind text NOT NULL,
+        on_date date NOT NULL,
+        evidence text NOT NULL,
+        PRIMARY KEY (backtest_name, symbol, kind)
+    )
+    """
+)
+
+
 def prepare(database: engine.Engine) -> None:
     """Create tables and add ohlc.provider on a database that already has the old unique key."""
     Base.metadata.create_all(database)
     with database.begin() as conn:
         conn.execute(_OHLC_PROVIDER_COLUMN)
         conn.execute(_OHLC_PROVIDER_KEY)
+        conn.execute(_SYMBOL_EVENT)
 
 
 def _bars_provider(backtest: backtest_pb.Backtest) -> str:

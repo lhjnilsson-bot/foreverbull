@@ -65,7 +65,9 @@ def _closes(sessions: pd.DatetimeIndex, first: float, step: float) -> list[float
     return [first + step * index for index in range(len(sessions))]
 
 
-def _ingester(sessions: pd.DatetimeIndex, member_sessions: pd.DatetimeIndex | None = None) -> SQLIngester:
+def _ingester(
+    sessions: pd.DatetimeIndex, member_sessions: pd.DatetimeIndex | None = None, *, delisted: bool = True
+) -> SQLIngester:
     """AAPL and XYZ held, OEF the benchmark on every session.
 
     XYZ's bars end on XYZ_LAST_BAR. AAPL's bars run on every session unless
@@ -91,6 +93,17 @@ def _ingester(sessions: pd.DatetimeIndex, member_sessions: pd.DatetimeIndex | No
         }
     )
     last = cast(pd.Timestamp, sessions[-1])
+    events = pd.DataFrame(columns=pd.Index(["symbol", "kind", "on_date", "evidence"]))
+    if delisted:
+        # Bars ending is not enough. Create stored Alpaca's inactive status.
+        events = pd.DataFrame(
+            {
+                "symbol": ["XYZ"],
+                "kind": ["delisted"],
+                "on_date": [XYZ_LAST_BAR.date()],
+                "evidence": ["alpaca asset status inactive"],
+            }
+        )
     backtest = backtest_pb.Backtest(
         name="sp100",
         benchmark="OEF",
@@ -105,7 +118,7 @@ def _ingester(sessions: pd.DatetimeIndex, member_sessions: pd.DatetimeIndex | No
             )
         ],
     )
-    return SQLIngester(backtest, engine=engine, aliases=aliases)
+    return SQLIngester(backtest, engine=engine, aliases=aliases, events=events)
 
 
 def _run(sessions: pd.DatetimeIndex) -> tuple[pd.DataFrame, dict[pd.Timestamp, set[str]]]:
@@ -174,8 +187,10 @@ def _sessions(start: str, end: str) -> pd.DatetimeIndex:
     )
 
 
-def _ingest_and_run(sessions: pd.DatetimeIndex, member_sessions: pd.DatetimeIndex | None = None):
-    ingester = _ingester(sessions, member_sessions)
+def _ingest_and_run(
+    sessions: pd.DatetimeIndex, member_sessions: pd.DatetimeIndex | None = None, *, delisted: bool = True
+):
+    ingester = _ingester(sessions, member_sessions, delisted=delisted)
     bundles.register(BUNDLE, ingester, calendar_name="XNYS")
     try:
         bundles.ingest(BUNDLE, os.environ, pd.Timestamp("2023-02-01", tz="UTC"), [], False)
@@ -235,7 +250,7 @@ def test_members_at_the_newest_bar_stay_held_on_a_benchmark_only_session(tmp_pat
     monkeypatch.setenv("ZIPLINE_ROOT", str(tmp_path))
     sessions = _sessions("2023-01-03", str(LEFT_OUT_SESSION.date()))
     member_sessions = pd.DatetimeIndex(sessions[sessions <= XYZ_LAST_BAR])
-    metadata, result, _ = _ingest_and_run(sessions, member_sessions)
+    metadata, result, _ = _ingest_and_run(sessions, member_sessions, delisted=False)
 
     for symbol in ("AAPL", "XYZ"):
         row = metadata.loc[metadata["symbol"] == symbol].iloc[0]
