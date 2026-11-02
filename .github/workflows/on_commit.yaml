@@ -65,7 +65,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - name: Sync dependencies
         run: uv sync --all-packages --all-extras
       - name: Lint
@@ -123,7 +123,7 @@ jobs:
           sudo make install
           sudo ldconfig
       - name: Install uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - name: Sync dependencies
         run: uv sync --all-packages --all-extras
       - name: Require workspace foreverbull packages
@@ -220,7 +220,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       # Go generators: buf 1.26.1, protoc 27.1, protoc-gen-go v1.31.0,
       # protoc-gen-go-grpc v1.5.1. Python generation uses the buf-bin,
       # protoc-gen-py, and protoc-gen-grpc-py pins in client/taskfile.yaml.
@@ -308,7 +308,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - name: Build
         run: uv build --all-packages
       - name: Upload packages
@@ -418,7 +418,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - name: Sync the client workspace
         working-directory: ./client
         run: uv sync --all-packages --all-extras
