@@ -7,12 +7,14 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/lhjnilsson/foreverbull/internal/environment"
+	"github.com/lhjnilsson/foreverbull/internal/usercopy"
 	common "github.com/lhjnilsson/foreverbull/pkg/pb"
 	service "github.com/lhjnilsson/foreverbull/pkg/pb/service"
 	pb "github.com/lhjnilsson/foreverbull/pkg/pb/strategy"
 	servicePb "github.com/lhjnilsson/foreverbull/pkg/pb/strategy/service"
 	"github.com/lhjnilsson/foreverbull/pkg/strategy/internal/repository"
 	"github.com/lhjnilsson/foreverbull/pkg/strategy/internal/stream"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -34,6 +36,61 @@ func GrafanaExecutionURL(grafanaURL, executionID string) (string, error) {
 	q.Set("var-execution", executionID)
 	built.RawQuery = q.Encode()
 	return built.String(), nil
+}
+
+// experimentRun names the experiment a failed run belongs to, for the
+// user's sentence.
+type experimentRun struct {
+	id       string
+	strategy string
+	backtest string
+}
+
+// failExperiment marks the experiment FAILED with cause and returns the
+// plain causes for the user: first, then "the failure couldn't be saved"
+// when the mark failed. The whole chain goes to the log.
+func failExperiment(ctx context.Context, experiments *repository.Experiment, run experimentRun, first string, cause error) []string {
+	causes := []string{first}
+	if err := experiments.Fail(ctx, run.id, cause); repository.StatusNotStored(err) {
+		causes = append(causes, usercopy.CauseFailureNotStored)
+		cause = err
+	}
+	log.Error().Err(cause).Str("experiment", run.id).Msg("experiment run failed")
+	return causes
+}
+
+// experimentRunError is the status a client sees for a failed run: one
+// sentence naming the experiment, the plain causes, and the step.
+func experimentRunError(run experimentRun, causes []string) error {
+	return status.Error(codes.Internal, usercopy.ExperimentRunFailed(run.strategy, run.backtest, causes))
+}
+
+// failExperimentRun marks the experiment FAILED and sends the failed step.
+// The status names the run's failure first, then any write, reload, or send
+// that failed on the way, as plain causes; the errors go to the log.
+func failExperimentRun(
+	ctx context.Context,
+	serverStream servicePb.StrategyServicer_CreateExperimentServer,
+	rsp *servicePb.CreateExperimentResponse,
+	experiments *repository.Experiment,
+	run experimentRun,
+	runErr error,
+) error {
+	causes := failExperiment(ctx, experiments, run, usercopy.CauseRunFailed, runErr)
+	rsp.RUNNING.State = common.State_STATE_FAILED
+	rsp.RUNNING.Message = runErr.Error()
+	reloaded, err := experiments.Get(ctx, run.id)
+	if err != nil {
+		log.Error().Err(err).Str("experiment", run.id).Msg("error reloading failed experiment")
+		causes = append(causes, usercopy.CauseNotReloaded)
+	} else {
+		rsp.Experiment = reloaded
+	}
+	if err := serverStream.Send(rsp); err != nil {
+		log.Error().Err(err).Str("experiment", run.id).Msg("error sending failed experiment step")
+		causes = append(causes, usercopy.CauseNotSent)
+	}
+	return experimentRunError(run, causes)
 }
 
 func (s *StrategyServer) CreateExperiment(
@@ -92,10 +149,13 @@ func (s *StrategyServer) CreateExperiment(
 	experiment.Status = pb.Experiment_RUNNING
 	rsp.RUNNING.State = common.State_STATE_RUNNING
 	rsp.Experiment = experiment
-	if err := serverStream.Send(rsp); err != nil {
-		return fmt.Errorf("send running: %w", err)
-	}
 
+	run := experimentRun{id: experiment.Id, strategy: req.GetStrategyName(), backtest: req.GetBacktestName()}
+	if err := serverStream.Send(rsp); err != nil {
+		// The run isn't started when fbull can't be told it is running.
+		return experimentRunError(run, failExperiment(ctx, &experiments, run,
+			usercopy.CauseStartNotSent, fmt.Errorf("send running: %w", err)))
+	}
 	out, runErr := s.launcher.Run(ctx, stream.RunInput{
 		ExperimentID: experiment.Id,
 		BacktestName: req.GetBacktestName(),
@@ -103,22 +163,15 @@ func (s *StrategyServer) CreateExperiment(
 	})
 	if out != nil && out.ExecutionID != "" {
 		if err := experiments.SetExecutionID(ctx, experiment.Id, out.ExecutionID); err != nil {
-			failErr := fmt.Errorf("set experiment execution id: %w", err)
-			_ = experiments.UpdateStatus(ctx, experiment.Id, pb.Experiment_FAILED, failErr)
-			return status.Error(codes.Internal, failErr.Error())
+			return experimentRunError(run, failExperiment(ctx, &experiments, run,
+				usercopy.CauseExecutionNotStored, fmt.Errorf("set experiment execution id: %w", err)))
 		}
 	}
 	if runErr != nil {
-		_ = experiments.UpdateStatus(ctx, experiment.Id, pb.Experiment_FAILED, runErr)
-		rsp.RUNNING.State = common.State_STATE_FAILED
-		rsp.RUNNING.Message = runErr.Error()
-		experiment, _ = experiments.Get(ctx, experiment.Id)
-		rsp.Experiment = experiment
-		_ = serverStream.Send(rsp)
-		return status.Errorf(codes.Internal, "run experiment: %v", runErr)
+		return failExperimentRun(ctx, serverStream, rsp, &experiments, run, runErr)
 	}
 
-	if err := experiments.UpdateStatus(ctx, experiment.Id, pb.Experiment_COMPLETED, nil); err != nil {
+	if err := experiments.Complete(ctx, experiment.Id); err != nil {
 		return status.Errorf(codes.Internal, "complete experiment: %v", err)
 	}
 	experiment, err = experiments.Get(ctx, experiment.Id)

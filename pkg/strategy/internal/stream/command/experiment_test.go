@@ -145,3 +145,34 @@ func (test *ExperimentCommandTest) TestExperimentRunParseFails() {
 	test.Require().Error(err)
 	test.Require().ErrorContains(err, "not working")
 }
+
+// The run's context is gone by the time the failure is stored, as when the
+// command is aborted. The FAILED write must still land, so the experiment
+// isn't left RUNNING.
+func (test *ExperimentCommandTest) TestExperimentRunCancelledStillMarksFailed() {
+	experiment := test.seedExperiment("eu")
+	ctx, cancel := context.WithCancel(context.Background())
+
+	launcher := new(ss.MockExperimentLauncher)
+	launcher.On("Run", mock.Anything, mock.Anything).Return(nil, context.Canceled).Run(func(mock.Arguments) {
+		cancel()
+	})
+
+	msg := new(stream.MockMessage)
+	msg.On("ParsePayload", mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		cmd := args.Get(0).(*ss.ExperimentRunCommand)
+		cmd.ExperimentID = experiment.Id
+	})
+	msg.On("MustGet", stream.DBDep).Return(test.conn)
+	msg.On("MustGet", dependency.ExperimentLauncherDep).Return(launcher)
+
+	err := command.ExperimentRun(ctx, msg)
+	test.Require().ErrorIs(err, context.Canceled)
+	test.Require().EqualError(err, "context canceled")
+
+	experiments := repository.Experiment{Conn: test.conn}
+	got, err := experiments.Get(context.Background(), experiment.Id)
+	test.Require().NoError(err)
+	test.Equal(pb.Experiment_FAILED, got.Status)
+	test.Equal("context canceled", got.GetError())
+}
