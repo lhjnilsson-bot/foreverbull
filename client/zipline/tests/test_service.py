@@ -3,6 +3,7 @@ import time
 
 from concurrent import futures
 from datetime import date
+from datetime import timedelta
 
 import grpc
 import pandas as pd
@@ -12,6 +13,7 @@ from foreverbull_zipline import service
 from foreverbull_zipline.data_bundles.foreverbull import SQLIngester
 from sqlalchemy import create_engine
 from zipline.data import bundles
+from zipline.utils.calendar_utils import get_calendar
 
 from foreverbull import exceptions
 from foreverbull.pb import pb_utils
@@ -74,6 +76,35 @@ class TestCalendarService:
         )
         response = stub.list_calendar_dates(req)
         assert len(response.dates) == 4
+
+    @pytest.mark.parametrize("past", ["start", "end"])
+    def test_list_calendar_dates_past_the_last_session_is_out_of_range(
+        self, stub: calendar_service_pb_grpc.CalendarClientSync, past: str
+    ):
+        # Past the last loaded session, the status is OUT_OF_RANGE and names
+        # that session, whichever of start and end is past it; the library's
+        # own text is not sent.
+        last = get_calendar("XNYS").last_session.date()
+        start = last + timedelta(days=45) if past == "start" else last - timedelta(days=5)
+        req = calendar_service_pb.ListCalendarDatesRequest(
+            code="XNYS",
+            start=pb_utils.from_pydate_to_proto_date(start),
+            end=pb_utils.from_pydate_to_proto_date(last + timedelta(days=59)),
+        )
+        with pytest.raises(grpc.RpcError) as raised:
+            stub.list_calendar_dates(req)
+        assert raised.value.code() == grpc.StatusCode.OUT_OF_RANGE
+        assert raised.value.details() == f"the XNYS calendar ends on {last.isoformat()}"
+
+    def test_list_calendar_dates_through_the_last_session(self, stub: calendar_service_pb_grpc.CalendarClientSync):
+        last = get_calendar("XNYS").last_session.date()
+        req = calendar_service_pb.ListCalendarDatesRequest(
+            code="XNYS",
+            start=pb_utils.from_pydate_to_proto_date(last - timedelta(days=14)),
+            end=pb_utils.from_pydate_to_proto_date(last),
+        )
+        response = stub.list_calendar_dates(req)
+        assert pb_utils.from_proto_date_to_pydate(response.dates[-1].date) == last
 
 
 class TestBacktestService:
