@@ -73,7 +73,13 @@ func (ns *NatsSubscriber) Subscribe(component, method string, cb func(context.Co
 			cancel()
 		})
 		if err != nil {
-			log.Err(err).Msg("error subscribing to abort")
+			// Without the abort subscription the command can't be cancelled,
+			// so it isn't run. The sender is waiting on RECEIVED; tell it.
+			err = Unreachable(fmt.Errorf("error subscribing to abort: %w", err))
+			log.Err(err).Str("id", msg.msg.GetId()).Msg("error starting command")
+			if pubErr := publishState(msg, pb.State_STATE_ERROR, stateError(err)); pubErr != nil {
+				log.Err(pubErr).Str("id", msg.msg.GetId()).Msg("error publishing state")
+			}
 			return
 		}
 		defer func() {
@@ -102,44 +108,39 @@ func (ns *NatsSubscriber) Subscribe(component, method string, cb func(context.Co
 			}
 		})
 		err = cb(ctx, msg)
+		var notices []string
 		var notice *Notice
 		if errors.As(err, &notice) {
 			// A notice is a completed command; its lines ride on the state.
-			if err := publishState(msg, pb.State_STATE_COMPLETED, nil, notice.Lines...); err != nil {
-				log.Err(err).Msg("error publishing state")
-			}
+			notices = notice.Lines
 			err = nil
-		} else if err == nil {
-			if err := publishState(msg, pb.State_STATE_COMPLETED, nil); err != nil {
-				log.Err(err).Msg("error publishing state")
-			}
+		}
+		if err == nil {
+			// The event goes out before COMPLETED, so a failed publish is
+			// reported as ERROR rather than after the sender saw success.
+			err = publishEvent(ns.jt, ns.module, component, method, msg.msg)
 		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				log.Info().Msg("command canceled")
 				if err := publishState(msg, pb.State_STATE_CANCELED, nil); err != nil {
-					log.Err(err).Msg("error publishing state")
+					log.Err(err).Str("id", msg.msg.GetId()).Msg("error publishing state")
 				}
 				return
 			}
 			log.Err(err).Msg("error executing command")
 			if err := publishState(msg, pb.State_STATE_ERROR, stateError(err)); err != nil {
-				log.Err(err).Msg("error publishing state")
+				log.Err(err).Str("id", msg.msg.GetId()).Msg("error publishing state")
 			}
 			return
 		}
+		if err := publishState(msg, pb.State_STATE_COMPLETED, nil, notices...); err != nil {
+			// The callback has no caller to return to; the sender times out
+			// waiting on a final state.
+			log.Err(err).Str("id", msg.msg.GetId()).Msg("error publishing state")
+			return
+		}
 		log.Info().Msg("command completed successfully")
-		payload, err := proto.Marshal(msg.msg)
-		if err != nil {
-			log.Err(err).Msg("error marshalling message")
-			return
-		}
-
-		_, err = ns.jt.Publish(fmt.Sprintf("foreverbull.%s.%s.%s.event", ns.module, component, method), payload)
-		if err != nil {
-			log.Err(err).Msg("error publishing event")
-			return
-		}
 	}
 
 	topic := fmt.Sprintf(TOPIC_TASK, ns.module, component, method)
@@ -195,5 +196,21 @@ func (ns *NatsSubscriber) Unsubscribe() error {
 		}
 	}
 
+	return nil
+}
+
+type eventPublisher interface {
+	Publish(subj string, data []byte, opts ...nats.PubOpt) (*nats.PubAck, error)
+}
+
+// publishEvent announces a completed command on its event subject.
+func publishEvent(js eventPublisher, module, component, method string, msg *pb.Message) error {
+	payload, err := proto.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("error marshalling event: %w", err)
+	}
+	if _, err := js.Publish(fmt.Sprintf("foreverbull.%s.%s.%s.event", module, component, method), payload); err != nil {
+		return Unreachable(fmt.Errorf("error publishing event: %w", err))
+	}
 	return nil
 }
