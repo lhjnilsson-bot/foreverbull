@@ -591,9 +591,12 @@ const recentSessionDays = 14
 // last, holds a real XNYS session after last: one that hasn't closed yet,
 // such as today's open session or a future weekday. A period after last
 // with no session in it, such as today's weekend, has no trading day
-// instead. Zipline's calendar lists sessions about a year ahead, so the
-// read stops recentSessionDays after last: any span that long holds a
-// session, and the read never goes past the calendar's end.
+// instead. Zipline's calendar lists sessions only about a year ahead and
+// fails a read past its last session. The read starts at most
+// recentSessionDays after last and spans recentSessionDays, a span that
+// always holds a session, so it ends within weeks of last, never at the
+// calendar's end. A period that starts later than that is not read:
+// nothing in it has closed yet, which is all the step needs.
 func hasUnclosedSession(ctx context.Context, ziplineEngine engine.Engine, start, end, last time.Time) (bool, error) {
 	from := last.AddDate(0, 0, 1)
 	if start.After(from) {
@@ -601,6 +604,9 @@ func hasUnclosedSession(ctx context.Context, ziplineEngine engine.Engine, start,
 	}
 	if end.Before(from) {
 		return false, nil
+	}
+	if from.After(last.AddDate(0, 0, recentSessionDays)) {
+		return true, nil
 	}
 	to := from.AddDate(0, 0, recentSessionDays)
 	if end.Before(to) {
