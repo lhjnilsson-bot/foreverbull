@@ -21,19 +21,36 @@ type stateSubscriber struct {
 	sub *nats.Subscription
 }
 
+// msgHandler records a task state. It runs on a NATS callback with no
+// caller to return to, so every failure is logged at error level with the
+// subject that names the message.
 func (s *stateSubscriber) msgHandler(msg *nats.Msg) {
 	state := &pb.State{}
 	err := proto.Unmarshal(msg.Data, state)
 	if err != nil {
-		log.Err(err).Msg("error unmarshalling message")
+		log.Err(err).Str("subject", msg.Subject).Msg("error unmarshalling message state")
 		return
 	}
 
-	messageId := strings.Split(msg.Subject, ".")[4]
-	err = s.repository.CreateMessageState(context.Background(), messageId, state)
+	messageID, err := stateMessageID(msg.Subject)
 	if err != nil {
-		log.Err(err).Msg("error creating message state")
+		log.Err(err).Msg("error recording message state")
+		return
 	}
+	err = s.repository.CreateMessageState(context.Background(), messageID, state)
+	if err != nil {
+		log.Err(err).Str("subject", msg.Subject).Str("id", messageID).Msg("error creating message state")
+	}
+}
+
+// stateMessageID reads the message id from a TOPIC_TASK_STATE subject,
+// foreverbull.<module>.<component>.<method>.<id>.state.
+func stateMessageID(subject string) (string, error) {
+	parts := strings.Split(subject, ".")
+	if len(parts) != 6 || parts[0] != "foreverbull" || parts[5] != "state" || parts[4] == "" {
+		return "", fmt.Errorf("state subject %q isn't foreverbull.<module>.<component>.<method>.<id>.state", subject)
+	}
+	return parts[4], nil
 }
 
 func (s *stateSubscriber) Start(ctx context.Context) error {
