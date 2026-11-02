@@ -1,3 +1,4 @@
+import datetime
 import logging
 import os
 import tarfile
@@ -85,6 +86,14 @@ class Session:
     server: grpc.Server
 
 
+def calendar_end_reason(code: str, last_session: datetime.date) -> str:
+    """The OUT_OF_RANGE status text for a read past the calendar: "the XNYS calendar ends on 2027-11-02".
+
+    The broker reads the date from it, so the shape is fixed.
+    """
+    return f"the {code} calendar ends on {last_session.isoformat()}"
+
+
 class CalendarService(calendar_service_pb_grpc.CalendarServiceSync):
     def __init__(self):
         self.logger = logging.getLogger(__name__)
@@ -96,6 +105,16 @@ class CalendarService(calendar_service_pb_grpc.CalendarServiceSync):
         calendar = get_calendar(request.code)
         start = pb_utils.from_proto_date_to_pydate(request.start)
         end = pb_utils.from_proto_date_to_pydate(request.end)
+        last = calendar.last_session.date()
+        if start > last or end > last:
+            # The calendar is loaded about a year ahead. A read past its last
+            # session is answered with that session under its own code, so
+            # the broker can name it, rather than with exchange_calendars'
+            # DateOutOfBounds text as an unknown error.
+            self.logger.warning(
+                "%s sessions from %s to %s are past the calendar's last session %s", request.code, start, end, last
+            )
+            context.abort(grpc.StatusCode.OUT_OF_RANGE, calendar_end_reason(request.code, last))
         dates = calendar.sessions_in_range(start, end)
         rsp = calendar_service_pb.ListCalendarDatesResponse()
         for date in dates:

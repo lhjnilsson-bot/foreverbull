@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -16,7 +17,9 @@ import (
 	servicePb "github.com/lhjnilsson/foreverbull/pkg/pb/backtest/service"
 	financeServicePb "github.com/lhjnilsson/foreverbull/pkg/pb/finance/service"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 // ziplineControlPort is the Zipline engine gRPC port, on the pod and on
@@ -96,6 +99,29 @@ func (z *Zipline) Ingest(ctx context.Context, backtest *pb.Backtest, object *sto
 // sessionCalendar is the exchange the bundle is written for.
 const sessionCalendar = "XNYS"
 
+// calendarEndStatus is the Zipline calendar service's OUT_OF_RANGE text for
+// a read past its last session: "the XNYS calendar ends on 2027-11-02"
+// (calendar_end_reason in service.py).
+var calendarEndStatus = regexp.MustCompile(`^the ([A-Z0-9]+) calendar ends on (\d{4}-\d{2}-\d{2})$`)
+
+// calendarEndError reads that status into an engine.CalendarEndError. It is
+// false for any other error, and for OUT_OF_RANGE with other text.
+func calendarEndError(err error) (*engine.CalendarEndError, bool) {
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.OutOfRange {
+		return nil, false
+	}
+	match := calendarEndStatus.FindStringSubmatch(st.Message())
+	if match == nil {
+		return nil, false
+	}
+	last, parseErr := time.Parse(time.DateOnly, match[2])
+	if parseErr != nil {
+		return nil, false
+	}
+	return &engine.CalendarEndError{Calendar: match[1], LastSession: last}, true
+}
+
 // Sessions asks Zipline's calendar service, on the control connection, for
 // the XNYS sessions. It is the exchange_calendars calendar the ingester
 // writes the bundle with, so both sides agree on which days are sessions.
@@ -106,6 +132,9 @@ func (z *Zipline) Sessions(ctx context.Context, start, end time.Time) ([]time.Ti
 		End:   commonPb.GoTimeToDate(end),
 	})
 	if err != nil {
+		if calendarEnd, ok := calendarEndError(err); ok {
+			return nil, calendarEnd
+		}
 		return nil, fmt.Errorf("error listing %s sessions: %w", sessionCalendar, err)
 	}
 
