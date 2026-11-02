@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,7 +80,7 @@ func TestAlpacaGetOHLCStopsWhenCtxIsCancelled(t *testing.T) {
 	srv, started := hangingServer(t)
 	// A 30s client timeout, so only the ctx can end the request in time.
 	bars := &AlpacaBars{opts: marketdata.ClientOpts{
-		APIKey: "key", APISecret: "secret", BaseURL: srv.URL, RetryLimit: 1,
+		APIKey: "key", APISecret: "secret", BaseURL: srv.URL,
 		HTTPClient: &http.Client{Timeout: 30 * time.Second},
 	}}
 	start := time.Date(2020, 8, 27, 0, 0, 0, 0, time.UTC)
@@ -118,22 +119,31 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
-// Alpaca retries a 429 many times; the fetch budget ends all of them, so a
-// fetch can't outlast Sync's idle timeout under the symbol lock.
+// Alpaca's fetch budget bounds every send and every wait between them, so
+// a fetch can't outlast Sync's idle timeout under the symbol lock. A wait
+// that would run past the budget isn't started: the fetch fails at once
+// with the status, not with a timeout.
 // Not parallel: it changes alpacaFetchBudget.
 func TestAlpacaGetOHLCStopsRetryingAtTheBudget(t *testing.T) {
 	old := alpacaFetchBudget
 	alpacaFetchBudget = 300 * time.Millisecond
 	t.Cleanup(func() { alpacaFetchBudget = old })
+	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	t.Cleanup(srv.Close)
-	bars := &AlpacaBars{opts: marketdata.ClientOpts{
-		APIKey: "key", APISecret: "secret", BaseURL: srv.URL, RetryLimit: 1000, RetryDelay: 50 * time.Millisecond,
-	}}
+	bars := &AlpacaBars{
+		opts:    marketdata.ClientOpts{APIKey: "key", APISecret: "secret", BaseURL: srv.URL},
+		limiter: newRequestLimiterEvery(time.Millisecond),
+	}
 	began := time.Now()
 	_, err := bars.GetOHLC(context.Background(), "AAPL", time.Date(2026, 5, 4, 0, 0, 0, 0, time.UTC), nil)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Less(t, time.Since(began), 5*time.Second)
+	require.NotErrorIs(t, err, context.DeadlineExceeded)
+	var barsErr *AlpacaBarsError
+	require.ErrorAs(t, err, &barsErr)
+	require.Equal(t, http.StatusTooManyRequests, barsErr.HTTPCode)
+	require.Equal(t, int32(1), hits.Load(), "the 2s backoff is past the 300ms budget")
+	require.Less(t, time.Since(began), 300*time.Millisecond)
 }

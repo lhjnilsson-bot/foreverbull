@@ -122,7 +122,7 @@ func TestAlpacaGetOHLCRequestsShareClassWithDot(t *testing.T) {
 	require.NoError(t, err)
 	srv, paths := recordingServer(t, string(response))
 	bars := &AlpacaBars{opts: marketdata.ClientOpts{
-		APIKey: "key", APISecret: "secret", BaseURL: srv.URL, RetryLimit: 1,
+		APIKey: "key", APISecret: "secret", BaseURL: srv.URL,
 	}}
 	start := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC)
@@ -158,7 +158,7 @@ func TestExchangeSuffixIsNotAShareClass(t *testing.T) {
 	require.NoError(t, err)
 	alpacaSrv, alpacaPaths := recordingServer(t, string(response))
 	bars := &AlpacaBars{opts: marketdata.ClientOpts{
-		APIKey: "key", APISecret: "secret", BaseURL: alpacaSrv.URL, RetryLimit: 1,
+		APIKey: "key", APISecret: "secret", BaseURL: alpacaSrv.URL,
 	}}
 	_, err = bars.GetOHLC(context.Background(), "VOD.L", start, &end)
 	require.NoError(t, err)

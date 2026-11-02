@@ -2,6 +2,7 @@ package marketdata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -189,6 +190,19 @@ type limitedTransport struct {
 	// retries is how many times a 429 is sent again; the last 429 is
 	// returned to the caller as it came.
 	retries int
+	// retryServerErrors sends a 5xx again too, within the same retries.
+	retryServerErrors bool
+	// keepFailedStatus returns the retryable status at once, instead of
+	// waiting, when the wait before the next send would end after the
+	// request ctx's deadline. The caller then sees the provider's status,
+	// not a timeout.
+	keepFailedStatus bool
+	// attemptTimeout bounds each send, the reading of its body included,
+	// when it is above zero. The waits between sends are bounded by the
+	// request ctx only.
+	attemptTimeout time.Duration
+	// observe, when set, is told each answer and its 0-based attempt.
+	observe func(attempt int, resp *http.Response)
 }
 
 func newLimitedTransport(provider string, limiter *requestLimiter, base http.RoundTripper, retries int) *limitedTransport {
@@ -198,6 +212,14 @@ func newLimitedTransport(provider string, limiter *requestLimiter, base http.Rou
 	return &limitedTransport{provider: provider, limiter: limiter, base: base, retries: retries}
 }
 
+// retryable is an answer this transport sends again.
+func (t *limitedTransport) retryable(code int) bool {
+	if code == http.StatusTooManyRequests {
+		return true
+	}
+	return t.retryServerErrors && code >= http.StatusInternalServerError && code <= 599
+}
+
 func (t *limitedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Only a request without a body is sent again; the price requests are
 	// all GETs.
@@ -205,26 +227,143 @@ func (t *limitedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	if req.Body != nil && req.Body != http.NoBody {
 		retries = 0
 	}
+	ctx := req.Context()
+	// last is the status of the last retryable answer, without its body,
+	// once a retry is under way.
+	var last *http.Response
 	for attempt := 0; ; attempt++ {
-		if err := t.limiter.wait(req.Context()); err != nil {
-			return nil, err
+		if err := t.limiter.wait(ctx); err != nil {
+			return t.endedRetry(req, last, err)
 		}
-		resp, err := t.base.RoundTrip(req) //nolint:bodyclose // returned to the caller or closed below
+		resp, err := t.send(req) //nolint:bodyclose // returned to the caller or closed below
 		if err != nil {
-			return nil, err //nolint:wrapcheck // passed through as is
+			return t.endedRetry(req, last, err)
 		}
-		if resp.StatusCode != http.StatusTooManyRequests {
+		if t.observe != nil {
+			t.observe(attempt, resp)
+		}
+		if !t.retryable(resp.StatusCode) {
 			return resp, nil
 		}
 		backoff := rateLimitBackoff(resp.Header, attempt)
-		t.limiter.pause(backoff)
-		log.Warn().Str("provider", t.provider).Dur("backoff", backoff).Int("attempt", attempt+1).
-			Msg("price provider answered 429, slowing every download to it")
-		if attempt < retries {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
-			_ = resp.Body.Close()
-			continue
+		if resp.StatusCode == http.StatusTooManyRequests {
+			t.limiter.pause(backoff)
+			log.Warn().Str("provider", t.provider).Dur("backoff", backoff).Int("attempt", attempt+1).
+				Msg("price provider answered 429, slowing every download to it")
+		} else {
+			log.Warn().Str("provider", t.provider).Int("status", resp.StatusCode).Dur("backoff", backoff).
+				Int("attempt", attempt+1).Msg("price provider answered a server error")
 		}
-		return resp, nil
+		if attempt >= retries {
+			return resp, nil
+		}
+		waited := time.Now().Add(backoff)
+		// The next send also waits out the provider's shared pause, which
+		// another caller's 429 may have set past this backoff.
+		next := waited
+		if paused := t.limiter.paused(); paused.After(next) {
+			next = paused
+		}
+		if deadline, ok := ctx.Deadline(); ok && t.keepFailedStatus && next.After(deadline) {
+			if atTaskLimitDeadline(ctx, deadline) {
+				// The task's own limit is reported as the limit (AtTaskLimit).
+				drainClose(resp)
+				return nil, &WaitRefusedError{Deadline: deadline}
+			}
+			log.Warn().Str("provider", t.provider).Int("status", resp.StatusCode).Time("next", next).
+				Msg("price provider's wait runs past the deadline, failing with its status")
+			return resp, nil
+		}
+		last = statusOnly(resp)
+		drainClose(resp)
+		// A 429 waits out the shared pause in limiter.wait. A 5xx waits its
+		// own backoff first.
+		if resp.StatusCode != http.StatusTooManyRequests {
+			if err := sleepUntil(ctx, time.Now(), waited); err != nil {
+				return t.endedRetry(req, last, err)
+			}
+		}
 	}
+}
+
+// endedRetry is the result when a wait or a send fails. When keepFailedStatus
+// is set and the request's deadline ended a retry, the caller gets the last
+// retryable status rather than the deadline, so the provider's cause is
+// named. A cancel without a deadline, a send that failed on its own, and the
+// task's own time limit keep their error.
+func (t *limitedTransport) endedRetry(req *http.Request, last *http.Response, err error) (*http.Response, error) {
+	if last == nil || !t.keepFailedStatus {
+		return nil, err
+	}
+	ctx := req.Context()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil, err
+	}
+	var refused *WaitRefusedError
+	switch {
+	case errors.As(err, &refused):
+		deadline = refused.Deadline
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+	default:
+		return nil, err
+	}
+	if atTaskLimitDeadline(ctx, deadline) {
+		return nil, err
+	}
+	log.Warn().Err(err).Str("provider", t.provider).Int("status", last.StatusCode).
+		Msg("price provider's retry ran into the deadline, failing with its last status")
+	resp := *last
+	resp.Body = http.NoBody
+	resp.Request = req
+	return &resp, nil
+}
+
+// statusOnly is resp's status and header without its body.
+func statusOnly(resp *http.Response) *http.Response {
+	return &http.Response{
+		Status: resp.Status, StatusCode: resp.StatusCode,
+		Proto: resp.Proto, ProtoMajor: resp.ProtoMajor, ProtoMinor: resp.ProtoMinor,
+		Header: resp.Header.Clone(), ContentLength: 0,
+	}
+}
+
+func drainClose(resp *http.Response) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	_ = resp.Body.Close()
+}
+
+// atTaskLimitDeadline reports that deadline is the task's own time limit
+// (WithTaskLimit), not a shorter one such as the fetch budget.
+func atTaskLimitDeadline(ctx context.Context, deadline time.Time) bool {
+	at, ok := ctx.Value(taskLimitKey{}).(time.Time)
+	return ok && !deadline.Before(at)
+}
+
+// send is one round trip, bounded by attemptTimeout when it is set. The
+// timeout ends when the body is closed, so reading it counts.
+func (t *limitedTransport) send(req *http.Request) (*http.Response, error) {
+	if t.attemptTimeout <= 0 {
+		return t.base.RoundTrip(req) //nolint:wrapcheck // passed through as is
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), t.attemptTimeout)
+	resp, err := t.base.RoundTrip(req.WithContext(ctx))
+	if err != nil {
+		cancel()
+		return nil, err //nolint:wrapcheck // passed through as is
+	}
+	resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+// cancelOnClose ends a send's timeout when its body is closed.
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnClose) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err //nolint:wrapcheck // passed through as is
 }

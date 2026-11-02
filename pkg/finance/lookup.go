@@ -52,7 +52,8 @@ func (e *LookupError) Error() string {
 func (e *LookupError) Unwrap() error { return e.Err }
 
 // httpStatusText is a status code named in a provider error, such as GetOHLC's
-// "HTTP 503 Service Unavailable". The typed StatusError wins when it is present.
+// "HTTP 503 Service Unavailable" from Yahoo or Stooq. The typed StatusError
+// and AlpacaBarsError win when they are present.
 var httpStatusText = regexp.MustCompile(`\bHTTP (\d{3})\b`)
 
 // asLookup classifies a provider error. The raw error stays on LookupError
@@ -74,12 +75,16 @@ func asLookup(ctx context.Context, provider, symbol string, err error) error {
 	status := 0
 	var blocked *marketdata.BlockedError
 	var httpErr *marketdata.StatusError
+	var barsErr *marketdata.AlpacaBarsError
 	switch {
 	case errors.As(err, &blocked):
 		kind = LookupBot
 	case errors.As(err, &httpErr):
 		kind = LookupHTTP
 		status = httpErr.Code
+	case errors.As(err, &barsErr):
+		kind = LookupHTTP
+		status = barsErr.HTTPCode
 	case lookupNetwork(err):
 		kind = LookupNetwork
 	default:

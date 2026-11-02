@@ -87,7 +87,7 @@ func TestRateLimitIsSharedAcrossConcurrentDownloads(t *testing.T) {
 		}},
 		{"alpaca", alpacaJSON, "application/json", func(_ *testing.T, url string, limiter *requestLimiter) getOHLC {
 			return (&AlpacaBars{
-				opts:    marketdata.ClientOpts{APIKey: "key", APISecret: "secret", BaseURL: url, RetryLimit: 1},
+				opts:    marketdata.ClientOpts{APIKey: "key", APISecret: "secret", BaseURL: url},
 				limiter: limiter,
 			}).GetOHLC
 		}},
