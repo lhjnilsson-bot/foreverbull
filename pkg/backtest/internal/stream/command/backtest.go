@@ -756,6 +756,9 @@ func DownloadFinancialData(ctx context.Context, msg stream.Message) error {
 	// Days the provider sent no price for, anywhere in the range, per
 	// request symbol. They join the stored-bar check, so create fails once.
 	reported := make(map[string][]time.Time)
+	// Symbols the provider answered with an HTTP error status. Every one is
+	// collected, then create fails once and names each cause.
+	var downloads []downloadMiss
 	for {
 		msg, err := rsp.Recv()
 		if err != nil {
@@ -779,6 +782,12 @@ func DownloadFinancialData(ctx context.Context, msg stream.Message) error {
 			return discardFailedBacktest(ctx, backtests, command.BacktestName, backtestID, err)
 		}
 		if msg.GetStatus() == financeServicePB.DownloadHistoricalDataResponse_STATUS_ERROR {
+			var barsStatus *financeapi.BarsStatusError
+			if errors.As(financeapi.DownloadFailure(msg), &barsStatus) {
+				downloads = append(downloads, downloadMiss{symbol: msg.GetSymbol(), cause: barsStatus})
+				progress.symbolDone()
+				continue
+			}
 			if days, ok := providerMissingDays(msg.GetError()); ok {
 				reported[msg.Symbol] = append(reported[msg.Symbol], days...)
 				progress.symbolDone()
@@ -793,7 +802,7 @@ func DownloadFinancialData(ctx context.Context, msg stream.Message) error {
 	}
 
 	return checkMissingSessions(ctx, msg, db, backtests, command.BacktestName, backtestID,
-		strings.ToLower(provider), b.GetProfile(), symbols, reported, period)
+		strings.ToLower(provider), b.GetProfile(), symbols, reported, period, downloads)
 }
 
 // isNoPriceDataError reports the finance service's no-bars STATUS_ERROR.

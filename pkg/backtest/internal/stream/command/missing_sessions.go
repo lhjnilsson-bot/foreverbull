@@ -649,9 +649,17 @@ func noSessionMessage(name string, start, end time.Time, removed bool) string {
 // it when it had no session.
 func checkMissingSessions(ctx context.Context, msg stream.Message, db *pgxpool.Pool, backtests repository.Backtest,
 	name, id, provider, profile string, symbols []string, reported map[string][]time.Time, period closedPeriod,
+	downloads []downloadMiss,
 ) error {
 	start, end := period.start, period.end
-	order := listedOrder(symbols)
+	// The benchmark is the first listed symbol, taken before the failed
+	// downloads are dropped. When its own download failed it has no bars
+	// here, so no edge is confirmed against it and no stock stands in.
+	benchmark := ""
+	if listed := listedOrder(symbols); len(listed) > 0 {
+		benchmark = listed[0]
+	}
+	order := listedOrder(withoutFailedDownloads(symbols, downloads))
 	stored := make([]string, 0, len(order))
 	for _, symbol := range order {
 		stored = append(stored, finance.StoredSymbol(symbol))
@@ -687,23 +695,22 @@ func checkMissingSessions(ctx context.Context, msg stream.Message, db *pgxpool.P
 		if err != nil {
 			return discardFailedIngest(ctx, backtests, name, id, err)
 		}
-		benchmark := ""
-		if len(names) > 0 {
-			benchmark = names[0]
+		if unit, ok := alias[benchmark]; ok {
+			benchmark = unit
 		}
 		var events []repository.SymbolEvent
 		gaps, events, misses, err = excuseEdges(ctx, db, eng, provider, profile, benchmark, period.sessions, joined, gaps)
 		if err != nil {
 			return discardFailedIngest(ctx, backtests, name, id, err)
 		}
-		if len(gaps) == 0 && len(misses) == 0 {
+		if len(gaps) == 0 && len(misses) == 0 && len(downloads) == 0 {
 			if err := backtests.SaveSymbolEvents(ctx, name, events); err != nil {
 				return discardFailedIngest(ctx, backtests, name, id, err)
 			}
 			return nil
 		}
 	}
-	if len(gaps) == 0 && len(misses) == 0 {
+	if len(gaps) == 0 && len(misses) == 0 && len(downloads) == 0 {
 		return nil
 	}
 	err = deleteAfterFailure(ctx, backtests, name, id)
@@ -711,13 +718,28 @@ func checkMissingSessions(ctx context.Context, msg stream.Message, db *pgxpool.P
 	if !removed {
 		log.Warn().Err(err).Str("backtest", name).Msg("error deleting backtest after missing sessions")
 	}
-	if len(misses) > 0 && len(gaps) > 0 {
-		return plainSentence(mixedCoverageMessage(name, provider, days, gaps, misses, removed))
+	if mixedFailures(len(gaps), len(misses), len(downloads)) {
+		return plainSentence(mixedCoverageMessage(name, provider, days, gaps, misses, downloads, removed))
+	}
+	if len(downloads) > 0 {
+		return plainSentence(downloadFailureMessage(name, provider, downloads, removed))
 	}
 	if len(misses) > 0 {
 		return plainSentence(lookupFailureMessage(name, provider, misses, removed))
 	}
 	return plainSentence(missingSessionsMessage(name, provider, days, gaps, removed))
+}
+
+// mixedFailures reports more than one kind of failure, which share one
+// mixed block.
+func mixedFailures(counts ...int) bool {
+	kinds := 0
+	for _, count := range counts {
+		if count > 0 {
+			kinds++
+		}
+	}
+	return kinds > 1
 }
 
 // ziplineMissingSessions matches the reason of Zipline's MissingSessionsError,
