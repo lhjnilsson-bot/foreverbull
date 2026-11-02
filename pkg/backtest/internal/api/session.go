@@ -237,10 +237,16 @@ func (s *grpcSessionServer) executionForListener(ctx context.Context, executionI
 	executions := repository.Execution{Conn: s.db}
 	execution, err := executions.Get(ctx, executionID)
 	if err != nil {
-		if environment.GetAuthEnabled() {
+		if errors.Is(err, pgx.ErrNoRows) {
+			if !environment.GetAuthEnabled() {
+				return nil, fmt.Errorf("error getting execution: %w", err)
+			}
 			return nil, status.Error(codes.NotFound, "not found")
 		}
-		return nil, fmt.Errorf("error getting execution: %w", err)
+		// A failed read is not "not found". The client gets a sentence, so
+		// the cause is logged here.
+		log.Error().Err(err).Str("execution_id", executionID).Msg("error reading execution")
+		return nil, status.Error(codes.Internal, usercopy.ExecutionReadFailed(executionID, "fbull backtest run "+s.session.GetBacktest()))
 	}
 	if environment.GetAuthEnabled() && execution.GetSession() != s.session.GetId() {
 		return nil, status.Error(codes.NotFound, "not found")
