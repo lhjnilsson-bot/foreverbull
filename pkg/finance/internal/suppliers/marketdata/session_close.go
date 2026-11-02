@@ -3,6 +3,7 @@ package marketdata
 import (
 	"fmt"
 	"time"
+
 	// The broker image may have no zoneinfo; embed America/New_York.
 	_ "time/tzdata"
 
