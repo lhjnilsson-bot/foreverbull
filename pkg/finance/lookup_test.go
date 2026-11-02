@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/lhjnilsson/foreverbull/pkg/finance/internal/suppliers/marketdata"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,4 +31,17 @@ func TestAsLookupKeepsANetworkFailureWhileTheContextIsLive(t *testing.T) {
 	var lookup *LookupError
 	require.ErrorAs(t, err, &lookup)
 	require.Equal(t, LookupNetwork, lookup.Kind)
+}
+
+// An Alpaca bars status is read from its type, not from its text: a
+// message without "HTTP <code>" still gives the code.
+func TestAsLookupReadsAnAlpacaBarsStatusByType(t *testing.T) {
+	t.Parallel()
+
+	cause := &marketdata.AlpacaBarsError{Symbol: "XYZ", HTTPCode: 503, HTTPStatus: "Service Unavailable", Tries: 4}
+	err := asLookup(context.Background(), "alpaca", "XYZ", fmt.Errorf("benchmark bars: %w", cause))
+	var lookup *LookupError
+	require.ErrorAs(t, err, &lookup)
+	require.Equal(t, LookupHTTP, lookup.Kind)
+	require.Equal(t, 503, lookup.Status)
 }
