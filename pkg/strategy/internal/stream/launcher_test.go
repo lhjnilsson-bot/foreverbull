@@ -13,6 +13,8 @@ import (
 	ss "github.com/lhjnilsson/foreverbull/pkg/strategy/internal/stream"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type mockStore struct {
@@ -172,4 +174,37 @@ func TestSessionLauncherSessionRunFails(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "fbull backtest create")
 	require.Contains(t, err.Error(), "no ingestions found")
+}
+
+// A session server that can't stop after a run that succeeded fails the
+// run with the server's sentence, without the gRPC wrap.
+func TestSessionLauncherCloseFails(t *testing.T) {
+	t.Parallel()
+
+	port := int64(27001)
+	store := new(mockStore)
+	store.On("GetBacktest", mock.Anything, "spy").Return(&backtestpb.Backtest{Name: "spy", Periods: []*backtestpb.Backtest_Period{spyPeriod()}}, nil)
+	store.On("CreateSession", mock.Anything, "spy").Return(&backtestpb.Session{Id: "session-1", Backtest: "spy"}, nil)
+	store.On("GetSession", mock.Anything, "session-1").Return(&backtestpb.Session{Id: "session-1", Backtest: "spy", Port: &port}, nil)
+	eventStream := new(stream.MockStream)
+	eventStream.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	sentence := "Backtest 'spy' finished, but foreverbull couldn't stop the processes running your strategy. " +
+		"Run `fbenv status` to check the environment before the next run."
+	client := new(mockSessionClient)
+	client.On("CreateExecution", mock.Anything, mock.Anything).Return(&servicePb.CreateExecutionResponse{
+		Execution: &backtestpb.Execution{Id: "exec-1", Session: "session-1"},
+	}, nil)
+	client.On("RunExecution", mock.Anything, "exec-1").Return(nil)
+	client.On("StoreResult", mock.Anything, "exec-1").Return(nil)
+	client.On("Close", mock.Anything).Return(status.Error(codes.Internal, sentence))
+
+	launcher := &ss.SessionLauncher{
+		Store:  store,
+		Stream: eventStream,
+		Dial:   func(context.Context, int64) (ss.SessionClient, error) { return client, nil },
+	}
+	out, err := launcher.Run(context.Background(), ss.RunInput{BacktestName: "spy"})
+	require.EqualError(t, err, sentence)
+	require.Equal(t, "exec-1", out.ExecutionID)
 }

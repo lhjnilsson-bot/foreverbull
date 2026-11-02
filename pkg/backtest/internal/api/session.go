@@ -10,6 +10,7 @@ import (
 	"github.com/lhjnilsson/foreverbull/internal/auth"
 	"github.com/lhjnilsson/foreverbull/internal/environment"
 	"github.com/lhjnilsson/foreverbull/internal/postgres"
+	"github.com/lhjnilsson/foreverbull/internal/usercopy"
 	"github.com/lhjnilsson/foreverbull/pkg/backtest/engine"
 	"github.com/lhjnilsson/foreverbull/pkg/backtest/internal/repository"
 	financebars "github.com/lhjnilsson/foreverbull/pkg/finance/bars"
@@ -249,11 +250,17 @@ func (s *grpcSessionServer) executionForListener(ctx context.Context, executionI
 
 func (s *grpcSessionServer) StopServer(_ context.Context, _ *servicePb.StopServerRequest) (*servicePb.StopServerResponse, error) {
 	log.Debug().Msg("stop server")
+	var closeErr error
 	if s.wp != nil {
-		if err := s.wp.Close(); err != nil {
-			log.Error().Err(err).Msg("error closing worker pool")
-		}
+		closeErr = s.wp.Close()
 	}
+	// The session server stops either way; a pool that didn't close is
+	// still the caller's failure.
 	close(s.activity)
+	if closeErr != nil {
+		// The socket error names local addresses, so it goes to the log.
+		log.Error().Err(closeErr).Str("session", s.session.GetId()).Msg("error closing worker pool")
+		return nil, status.Error(codes.Internal, usercopy.BacktestStopFailed(s.session.GetBacktest()))
+	}
 	return &servicePb.StopServerResponse{}, nil
 }

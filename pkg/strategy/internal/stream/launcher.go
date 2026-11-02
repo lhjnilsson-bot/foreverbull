@@ -15,9 +15,11 @@ import (
 	backtestpb "github.com/lhjnilsson/foreverbull/pkg/pb/backtest"
 	servicePb "github.com/lhjnilsson/foreverbull/pkg/pb/backtest/service"
 	service "github.com/lhjnilsson/foreverbull/pkg/pb/service"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // ErrBacktestMissing is returned when the named backtest does not exist.
@@ -55,7 +57,7 @@ func NewSessionLauncher(store backtest.Store, eventStream stream.Stream) *Sessio
 	}
 }
 
-func (l *SessionLauncher) Run(ctx context.Context, in RunInput) (*RunOutput, error) {
+func (l *SessionLauncher) Run(ctx context.Context, in RunInput) (out *RunOutput, err error) {
 	if l.Store == nil {
 		return nil, fmt.Errorf("backtest store is not configured")
 	}
@@ -102,7 +104,19 @@ func (l *SessionLauncher) Run(ctx context.Context, in RunInput) (*RunOutput, err
 	if err != nil {
 		return nil, fmt.Errorf("dial backtest session: %w", err)
 	}
-	defer func() { _ = client.Close(ctx) }()
+	// Close stops the session server. When it fails after a run that
+	// succeeded, the run fails with the server's sentence; after a run that
+	// already failed, the run's own error stays and the close is logged.
+	defer func() {
+		closeErr := sessionCloseError(client.Close(ctx))
+		switch {
+		case closeErr == nil:
+		case err == nil:
+			err = closeErr
+		default:
+			log.Error().Err(closeErr).Str("experiment", in.ExperimentID).Msg("error stopping backtest session after a failed run")
+		}
+	}()
 
 	algo := in.Algorithm
 	if algo == nil {
@@ -122,7 +136,7 @@ func (l *SessionLauncher) Run(ctx context.Context, in RunInput) (*RunOutput, err
 		return nil, fmt.Errorf("create execution: empty execution id")
 	}
 
-	out := &RunOutput{
+	out = &RunOutput{
 		SessionID:   session.Id,
 		ExecutionID: created.GetExecution().GetId(),
 	}
@@ -135,6 +149,18 @@ func (l *SessionLauncher) Run(ctx context.Context, in RunInput) (*RunOutput, err
 	}
 
 	return out, nil
+}
+
+// sessionCloseError keeps a session server's sentence without the gRPC
+// "rpc error: code = … desc =" wrap.
+func sessionCloseError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if st, ok := status.FromError(err); ok {
+		return errors.New(st.Message())
+	}
+	return err
 }
 
 func (l *SessionLauncher) loadBacktest(ctx context.Context, in RunInput) (*backtestpb.Backtest, error) {
