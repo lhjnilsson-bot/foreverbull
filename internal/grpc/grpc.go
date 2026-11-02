@@ -15,6 +15,8 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/selector"
 	"github.com/lhjnilsson/foreverbull/internal/auth"
 	"github.com/lhjnilsson/foreverbull/internal/environment"
+	"github.com/lhjnilsson/foreverbull/internal/usercopy"
+	"github.com/rs/zerolog/log"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -253,6 +255,10 @@ func accountFromBearer(ctx context.Context, lookup BearerLookup) (auth.Account, 
 	if err != nil {
 		if errors.Is(err, auth.ErrUnauthorized) {
 			return auth.Account{}, status.Error(codes.Unauthenticated, "unauthorized")
+		}
+		if errors.Is(err, auth.ErrUseNotRecorded) {
+			log.Error().Err(err).Msg("token use not recorded")
+			return auth.Account{}, status.Error(codes.Unavailable, usercopy.RequestNotRecorded)
 		}
 		return auth.Account{}, status.Error(codes.Internal, clientInternalDatabase)
 	}

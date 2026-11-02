@@ -175,10 +175,12 @@ func AccountFromBearer(ctx context.Context, db postgres.Query, token string, now
 	if !knownRole(account.Role) || (account.Scope != ScopeRead && account.Scope != ScopeWrite) {
 		return Account{}, ErrUnauthorized
 	}
-	_, _ = db.Exec(ctx, `
+	if _, err := db.Exec(ctx, `
 		UPDATE api_token
 		SET last_used_at = $2
 		WHERE id = $1
-		  AND (last_used_at IS NULL OR last_used_at < $2::timestamptz - interval '5 minutes')`, tokenID, now)
+		  AND (last_used_at IS NULL OR last_used_at < $2::timestamptz - interval '5 minutes')`, tokenID, now); err != nil {
+		return Account{}, &useNotRecordedError{what: "token", err: err}
+	}
 	return account, nil
 }
