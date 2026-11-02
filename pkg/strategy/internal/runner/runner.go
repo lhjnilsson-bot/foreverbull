@@ -41,8 +41,14 @@ type InProcess struct {
 	rootCancel context.CancelFunc
 
 	mu    sync.Mutex
-	loops map[string]context.CancelFunc
+	loops map[string]*loopHandle
 	wg    sync.WaitGroup
+}
+
+// loopHandle stops one deployment loop; done closes once the loop has ended.
+type loopHandle struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 func New(store Store, clock Clock, clients supplier.Registry, processor Processor) *InProcess {
@@ -55,7 +61,7 @@ func New(store Store, clock Clock, clients supplier.Registry, processor Processo
 		poll:       defaultPollInterval,
 		rootCtx:    ctx,
 		rootCancel: cancel,
-		loops:      map[string]context.CancelFunc{},
+		loops:      map[string]*loopHandle{},
 	}
 }
 
@@ -82,9 +88,8 @@ func (r *InProcess) Stop(ctx context.Context) error {
 	r.rootCancel()
 
 	r.mu.Lock()
-	for id, cancel := range r.loops {
-		cancel()
-		delete(r.loops, id)
+	for _, handle := range r.loops {
+		handle.cancel()
 	}
 	r.mu.Unlock()
 
@@ -114,27 +119,43 @@ func (r *InProcess) Add(_ context.Context, d *pb.Deployment) error {
 	}
 
 	loopCtx, cancel := context.WithCancel(r.rootCtx)
-	r.loops[d.Id] = cancel
+	handle := &loopHandle{cancel: cancel, done: make(chan struct{})}
+	r.loops[d.Id] = handle
 	r.wg.Add(1)
 	go func(id string) {
 		defer r.wg.Done()
+		defer func() {
+			r.mu.Lock()
+			if r.loops[id] == handle {
+				delete(r.loops, id)
+			}
+			r.mu.Unlock()
+			close(handle.done)
+		}()
 		r.loop(loopCtx, id)
 	}(d.Id)
 	return nil
 }
 
-// Remove stops the loop for a deployment. Idempotent.
-func (r *InProcess) Remove(_ context.Context, deploymentID string) error {
+// Remove stops the loop for a deployment and waits until it has ended, so
+// nothing the loop writes can land after Remove returns. The wait is bounded
+// by ctx: when ctx ends first, Remove fails with ctx's cause and the loop
+// stays listed until it ends, so a later Remove waits for it again.
+// Idempotent: a deployment without a loop returns nil.
+func (r *InProcess) Remove(ctx context.Context, deploymentID string) error {
 	r.mu.Lock()
-	cancel, ok := r.loops[deploymentID]
-	if ok {
-		delete(r.loops, deploymentID)
-	}
+	handle, ok := r.loops[deploymentID]
 	r.mu.Unlock()
-	if ok {
-		cancel()
+	if !ok {
+		return nil
 	}
-	return nil
+	handle.cancel()
+	select {
+	case <-handle.done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for deployment %s loop to stop: %w", deploymentID, context.Cause(ctx))
+	}
 }
 
 func (r *InProcess) loop(ctx context.Context, deploymentID string) {
@@ -185,8 +206,9 @@ func (r *InProcess) loop(ctx context.Context, deploymentID string) {
 }
 
 // fail stores cause as the deployment's ERROR; the loop then ends. A loop
-// stopped through ctx is not a failure: StopDeployment already wrote
-// STOPPED, and at shutdown the row stays running so Start resumes it. The
+// stopped through ctx is not a failure: Remove waits for the loop to end
+// before StopDeployment writes STOPPED, and at shutdown the row stays
+// running so Start resumes it. The
 // write is detached from ctx and bounded. The loop has no caller, so a
 // status write that fails too is logged with both causes.
 func (r *InProcess) fail(ctx context.Context, deploymentID string, cause error) {

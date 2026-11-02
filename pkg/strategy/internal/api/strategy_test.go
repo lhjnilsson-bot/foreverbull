@@ -35,6 +35,7 @@ type recordingRunner struct {
 	removed   []string
 	addErr    error
 	removeErr error
+	onRemove  func()
 }
 
 func (r *recordingRunner) Add(_ context.Context, d *pb.Deployment) error {
@@ -42,9 +43,15 @@ func (r *recordingRunner) Add(_ context.Context, d *pb.Deployment) error {
 	return r.addErr
 }
 
-func (r *recordingRunner) Remove(_ context.Context, deploymentID string) error {
+func (r *recordingRunner) Remove(ctx context.Context, deploymentID string) error {
 	r.removed = append(r.removed, deploymentID)
-	return r.removeErr
+	if r.onRemove != nil {
+		r.onRemove()
+	}
+	if r.removeErr != nil {
+		return r.removeErr
+	}
+	return ctx.Err()
 }
 
 type stubTrading struct{}
@@ -899,5 +906,63 @@ func (test *StrategyServerTest) TestCreateExperimentCompletesAfterClientLeft() {
 		test.Require().Len(list, 1)
 		test.Equal(pb.Experiment_COMPLETED, list[0].GetStatus())
 		test.Equal(executionID, list[0].GetExecutionId())
+	})
+}
+
+// A runner that can't stop the loop fails StopDeployment with a sentence
+// instead of reporting a clean stop.
+func (test *StrategyServerTest) TestStopDeploymentRunnerRemoveFails() {
+	test.Run("runner remove fails", func() {
+		version := test.seedDeployableVersion("mean-rev", "algo:local")
+		_, err := test.client.Deploy(context.Background(), &servicePb.DeployRequest{
+			StrategyName: "mean-rev",
+			VersionId:    version.Id,
+		})
+		test.Require().NoError(err)
+		test.runner.removeErr = errors.New("loop is busy")
+
+		_, err = test.client.StopDeployment(context.Background(), &servicePb.StopDeploymentRequest{
+			StrategyName: "mean-rev",
+		})
+		st, ok := status.FromError(err)
+		test.Require().True(ok)
+		test.Equal(codes.Internal, st.Code())
+		test.Equal("Couldn't stop deployment 'mean-rev'. Run `fbenv status` to check that the environment is running, "+
+			"then run `fbull strategy stop mean-rev` again.", st.Message())
+
+		// The loop didn't stop, so the row isn't STOPPED either.
+		deployments := repository.Deployment{Conn: test.pgx}
+		list, err := deployments.List(context.Background(), "mean-rev")
+		test.Require().NoError(err)
+		test.Require().Len(list, 1)
+		test.Equal(pb.Deployment_RUNNING, list[0].GetStatus())
+	})
+}
+
+// A client that goes away while the loop stops still gets the row STOPPED:
+// neither the wait for the loop nor the STOPPED write runs on the request's
+// context.
+func (test *StrategyServerTest) TestStopDeploymentStopsAfterClientLeft() {
+	test.Run("client left during stop", func() {
+		version := test.seedDeployableVersion("mean-rev", "algo:local")
+		_, err := test.client.Deploy(context.Background(), &servicePb.DeployRequest{
+			StrategyName: "mean-rev",
+			VersionId:    version.Id,
+		})
+		test.Require().NoError(err)
+		srv := api.NewStrategyServer(test.pgx, test.launcher, test.runner)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		test.runner.onRemove = cancel
+
+		rsp, err := srv.StopDeployment(ctx, &servicePb.StopDeploymentRequest{StrategyName: "mean-rev"})
+		test.Require().NoError(err)
+		test.Equal(pb.Deployment_STOPPED, rsp.GetDeployment().GetStatus())
+
+		deployments := repository.Deployment{Conn: test.pgx}
+		list, err := deployments.List(context.Background(), "mean-rev")
+		test.Require().NoError(err)
+		test.Require().Len(list, 1)
+		test.Equal(pb.Deployment_STOPPED, list[0].GetStatus())
 	})
 }
