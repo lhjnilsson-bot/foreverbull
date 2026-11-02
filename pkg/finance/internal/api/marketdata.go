@@ -89,7 +89,12 @@ func (fs *MarketdataServer) GetAsset(ctx context.Context, req *servicePb.GetAsse
 	}, nil
 }
 
+// GetIndex looks up every member of the index at the provider, so it is
+// limited to an editor or an admin like DownloadHistoricalData.
 func (fs *MarketdataServer) GetIndex(ctx context.Context, req *servicePb.GetIndexRequest) (*servicePb.GetIndexResponse, error) {
+	if err := requireTradingEditor(ctx); err != nil {
+		return nil, err
+	}
 	assets, err := fs.marketdata.GetIndex(ctx, req.GetSymbol())
 	if err != nil {
 		// The cause, which names each member that failed, is logged
