@@ -8,9 +8,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lhjnilsson/foreverbull/internal/environment"
+	"github.com/lhjnilsson/foreverbull/internal/usercopy"
 	pb "github.com/lhjnilsson/foreverbull/pkg/pb/strategy"
 	servicePb "github.com/lhjnilsson/foreverbull/pkg/pb/strategy/service"
 	"github.com/lhjnilsson/foreverbull/pkg/strategy/internal/repository"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -85,8 +87,11 @@ func (s *StrategyServer) Deploy(ctx context.Context, req *servicePb.DeployReques
 
 	if s.runner != nil {
 		if err := s.runner.Add(ctx, deployment); err != nil {
-			_ = deployments.UpdateStatus(ctx, deployment.Id, pb.Deployment_ERROR, err)
-			return nil, status.Errorf(codes.Internal, "start deployment runner: %v", err)
+			failErr := deployments.Fail(ctx, deployment.Id, err)
+			notStored := repository.StatusNotStored(failErr)
+			log.Error().Err(failErr).Str("deployment", deployment.Id).Bool("error_not_stored", notStored).
+				Msg("error starting deployment runner")
+			return nil, status.Error(codes.Internal, usercopy.DeploymentStartFailed(req.GetStrategyName(), notStored))
 		}
 	}
 

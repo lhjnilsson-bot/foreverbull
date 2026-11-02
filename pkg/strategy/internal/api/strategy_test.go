@@ -31,18 +31,20 @@ import (
 )
 
 type recordingRunner struct {
-	added   []*pb.Deployment
-	removed []string
+	added     []*pb.Deployment
+	removed   []string
+	addErr    error
+	removeErr error
 }
 
 func (r *recordingRunner) Add(_ context.Context, d *pb.Deployment) error {
 	r.added = append(r.added, d)
-	return nil
+	return r.addErr
 }
 
 func (r *recordingRunner) Remove(_ context.Context, deploymentID string) error {
 	r.removed = append(r.removed, deploymentID)
-	return nil
+	return r.removeErr
 }
 
 type stubTrading struct{}
@@ -377,6 +379,11 @@ func (test *StrategyServerTest) TestCreateExperiment() {
 		last := msgs[len(msgs)-1]
 		test.Equal(pb.Experiment_FAILED, last.GetExperiment().GetStatus())
 		test.Contains(last.GetExperiment().GetError(), "engine down")
+		st, ok := status.FromError(err)
+		test.Require().True(ok)
+		test.Equal(codes.Internal, st.Code())
+		test.Equal("Couldn't run experiment 'mean-rev': the backtest run failed. Run `fbenv status` to check that "+
+			"the environment is running, then run `fbull strategy experiment mean-rev --backtest spy` again.", st.Message())
 	})
 
 	test.Run("version by rev", func() {
@@ -757,5 +764,140 @@ func (test *StrategyServerTest) TestStopAndListDeploymentRuns() {
 		test.Len(listed.Runs, 1)
 		test.Equal(deployed.Deployment.Id, listed.Runs[0].DeploymentId)
 		test.False(listed.Runs[0].Skipped)
+	})
+}
+
+// A runner that can't start the loop leaves the deployment ERROR with the
+// cause, and the caller gets the sentence naming the deployment.
+func (test *StrategyServerTest) TestDeployRunnerAddFails() {
+	test.Run("runner add fails", func() {
+		version := test.seedDeployableVersion("mean-rev", "algo:local")
+		test.runner.addErr = errors.New("loop table full")
+		_, err := test.client.Deploy(context.Background(), &servicePb.DeployRequest{
+			StrategyName: "mean-rev",
+			VersionId:    version.Id,
+		})
+		st, ok := status.FromError(err)
+		test.Require().True(ok)
+		test.Equal(codes.Internal, st.Code())
+		test.Equal("Couldn't start deployment 'mean-rev'. Run `fbenv status` to check that the environment is running, "+
+			"then run `fbull strategy deploy mean-rev` again.", st.Message())
+
+		deployments := repository.Deployment{Conn: test.pgx}
+		list, err := deployments.List(context.Background(), "mean-rev")
+		test.Require().NoError(err)
+		test.Require().Len(list, 1)
+		test.Equal(pb.Deployment_ERROR, list[0].GetStatus())
+		test.Equal("loop table full", list[0].GetError())
+	})
+}
+
+// A runner that can't start and an ERROR that can't be saved either: the
+// row still reads RUNNING, so the sentence says so and stops it first.
+func (test *StrategyServerTest) TestDeployRunnerAddFailsAndErrorNotStored() {
+	test.Run("error not stored", func() {
+		version := test.seedDeployableVersion("mean-rev", "algo:local")
+		_, err := test.pgx.Exec(context.Background(), `
+			CREATE OR REPLACE FUNCTION refuse_deployment_error() RETURNS trigger AS $$
+			BEGIN RAISE EXCEPTION 'disk full'; END $$ LANGUAGE plpgsql;
+			CREATE TRIGGER refuse_deployment_error BEFORE UPDATE ON strategy_deployment
+			FOR EACH ROW WHEN (NEW.error IS NOT NULL) EXECUTE FUNCTION refuse_deployment_error();`)
+		test.Require().NoError(err)
+		test.runner.addErr = errors.New("loop table full")
+
+		_, err = test.client.Deploy(context.Background(), &servicePb.DeployRequest{
+			StrategyName: "mean-rev",
+			VersionId:    version.Id,
+		})
+		st, ok := status.FromError(err)
+		test.Require().True(ok)
+		test.Equal(codes.Internal, st.Code())
+		test.Equal("Couldn't start deployment 'mean-rev', and the failure couldn't be saved, so the deployment still shows as running. "+
+			"Run `fbenv status` to check that the environment is running, "+
+			"then run `fbull strategy stop mean-rev`, then `fbull strategy deploy mean-rev`.", st.Message())
+
+		deployments := repository.Deployment{Conn: test.pgx}
+		list, err := deployments.List(context.Background(), "mean-rev")
+		test.Require().NoError(err)
+		test.Require().Len(list, 1)
+		test.Equal(pb.Deployment_RUNNING, list[0].GetStatus())
+	})
+}
+
+// experimentStream is a CreateExperiment server stream whose Send fails
+// on call failAt (1-based; 0 never fails).
+type experimentStream struct {
+	grpc.ServerStream
+	ctx    context.Context
+	sends  int
+	failAt int
+}
+
+func (s *experimentStream) Context() context.Context { return s.ctx }
+
+func (s *experimentStream) Send(*servicePb.CreateExperimentResponse) error {
+	s.sends++
+	if s.sends == s.failAt {
+		return errors.New("client went away")
+	}
+	return nil
+}
+
+// A RUNNING step that can't be sent stops the experiment before the run,
+// and the row is FAILED instead of left RUNNING.
+func (test *StrategyServerTest) TestCreateExperimentRunningNotSent() {
+	test.Run("running not sent", func() {
+		version := test.seedVersion("mean-rev", "algo:local", service.Service_Status_READY)
+		test.insertBacktest("spy")
+		srv := api.NewStrategyServer(test.pgx, test.launcher, test.runner)
+
+		err := srv.CreateExperiment(&servicePb.CreateExperimentRequest{
+			StrategyName: "mean-rev",
+			VersionId:    version.Id,
+			BacktestName: "spy",
+		}, &experimentStream{ctx: context.Background(), failAt: 3})
+		st, ok := status.FromError(err)
+		test.Require().True(ok)
+		test.Equal(codes.Internal, st.Code())
+		test.Equal("Couldn't run experiment 'mean-rev': fbull couldn't be told the run had started. "+
+			"Run `fbenv status` to check that the environment is running, "+
+			"then run `fbull strategy experiment mean-rev --backtest spy` again.", st.Message())
+		test.launcher.AssertNotCalled(test.T(), "Run", mock.Anything, mock.Anything)
+
+		experiments := repository.Experiment{Conn: test.pgx}
+		list, err := experiments.List(context.Background(), "mean-rev", "", "")
+		test.Require().NoError(err)
+		test.Require().Len(list, 1)
+		test.Equal(pb.Experiment_FAILED, list[0].GetStatus())
+		test.Equal("send running: client went away", list[0].GetError())
+	})
+}
+
+// A client that goes away during the run still gets the row COMPLETED with
+// its execution: neither write runs on the request's context.
+func (test *StrategyServerTest) TestCreateExperimentCompletesAfterClientLeft() {
+	test.Run("client left during run", func() {
+		version := test.seedVersion("mean-rev", "algo:local", service.Service_Status_READY)
+		executionID := test.insertExecution("spy")
+		srv := api.NewStrategyServer(test.pgx, test.launcher, test.runner)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		test.launcher.On("Run", mock.Anything, mock.Anything).
+			Run(func(mock.Arguments) { cancel() }).
+			Return(&ss.RunOutput{ExecutionID: executionID}, nil)
+
+		err := srv.CreateExperiment(&servicePb.CreateExperimentRequest{
+			StrategyName: "mean-rev",
+			VersionId:    version.Id,
+			BacktestName: "spy",
+		}, &experimentStream{ctx: ctx})
+		test.Require().Error(err)
+
+		experiments := repository.Experiment{Conn: test.pgx}
+		list, err := experiments.List(context.Background(), "mean-rev", "", "")
+		test.Require().NoError(err)
+		test.Require().Len(list, 1)
+		test.Equal(pb.Experiment_COMPLETED, list[0].GetStatus())
+		test.Equal(executionID, list[0].GetExecutionId())
 	})
 }

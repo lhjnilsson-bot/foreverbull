@@ -42,9 +42,7 @@ func ExperimentRun(ctx context.Context, msg stream.Message) error {
 	versions := repository.Version{Conn: db}
 	version, err := versions.Get(ctx, experiment.VersionId)
 	if err != nil {
-		failErr := fmt.Errorf("get experiment version: %w", err)
-		_ = experiments.UpdateStatus(ctx, experiment.Id, pb.Experiment_FAILED, failErr)
-		return failErr
+		return experiments.Fail(ctx, experiment.Id, fmt.Errorf("get experiment version: %w", err))
 	}
 
 	runInput := ss.RunInput{
@@ -55,27 +53,22 @@ func ExperimentRun(ctx context.Context, msg stream.Message) error {
 	if environment.GetAuthEnabled() {
 		backtestID, idErr := experiments.BacktestID(ctx, experiment.Id)
 		if idErr != nil {
-			_ = experiments.UpdateStatus(ctx, experiment.Id, pb.Experiment_FAILED, idErr)
-			return fmt.Errorf("experiment backtest id: %w", idErr)
+			return experiments.Fail(ctx, experiment.Id, fmt.Errorf("experiment backtest id: %w", idErr))
 		}
 		if backtestID == "" {
-			err = fmt.Errorf("backtest id is empty")
-			_ = experiments.UpdateStatus(ctx, experiment.Id, pb.Experiment_FAILED, err)
-			return err
+			return experiments.Fail(ctx, experiment.Id, fmt.Errorf("backtest id is empty"))
 		}
 		runInput.BacktestID = backtestID
 	}
 	out, runErr := launcher.Run(ctx, runInput)
 	if out != nil && out.ExecutionID != "" {
 		if err := experiments.SetExecutionID(ctx, experiment.Id, out.ExecutionID); err != nil {
-			_ = experiments.UpdateStatus(ctx, experiment.Id, pb.Experiment_FAILED, err)
-			return fmt.Errorf("set experiment execution id: %w", err)
+			return experiments.Fail(ctx, experiment.Id, fmt.Errorf("set experiment execution id: %w", err))
 		}
 	}
 	if runErr != nil {
-		_ = experiments.UpdateStatus(ctx, experiment.Id, pb.Experiment_FAILED, runErr)
-		return runErr
+		return experiments.Fail(ctx, experiment.Id, runErr)
 	}
 
-	return experiments.UpdateStatus(ctx, experiment.Id, pb.Experiment_COMPLETED, nil)
+	return experiments.Complete(ctx, experiment.Id)
 }

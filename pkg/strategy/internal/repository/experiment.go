@@ -202,8 +202,61 @@ func (db *Experiment) UpdateStatus(ctx context.Context, id string, status pb.Exp
 	return nil
 }
 
+// StatusWriteTimeout bounds the write that records a failure. That write
+// runs on a context detached from the caller's, so a request the client
+// cancelled still leaves the row failed instead of running.
+const StatusWriteTimeout = 10 * time.Second
+
+// StatusNotStoredError is a failure whose status couldn't be written: the
+// row still reads as it did. Its text names the cause and the write.
+type StatusNotStoredError struct {
+	Cause error
+	Err   error
+	// what names the row and the status it couldn't get, such as
+	// "experiment e-1 couldn't be marked failed".
+	what string
+}
+
+func (e *StatusNotStoredError) Error() string {
+	return fmt.Sprintf("%v; %s: %v", e.Cause, e.what, e.Err)
+}
+
+func (e *StatusNotStoredError) Unwrap() []error { return []error{e.Cause, e.Err} }
+
+// StatusNotStored reports whether err is a failure whose status couldn't be
+// written (a *StatusNotStoredError).
+func StatusNotStored(err error) bool {
+	var notStored *StatusNotStoredError
+	return errors.As(err, &notStored)
+}
+
+// Fail stores cause on the experiment as FAILED and returns cause. When the
+// status can't be written, it returns a *StatusNotStoredError naming both.
+func (db *Experiment) Fail(ctx context.Context, id string, cause error) error {
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), StatusWriteTimeout)
+	defer cancel()
+	if err := db.UpdateStatus(writeCtx, id, pb.Experiment_FAILED, cause); err != nil {
+		return &StatusNotStoredError{Cause: cause, Err: err, what: fmt.Sprintf("experiment %s couldn't be marked failed", id)}
+	}
+	return cause
+}
+
+// Complete stores the experiment as COMPLETED on a context detached from
+// ctx and bounded by StatusWriteTimeout, like Fail, so a client that went
+// away after the run doesn't leave the row running.
+func (db *Experiment) Complete(ctx context.Context, id string) error {
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), StatusWriteTimeout)
+	defer cancel()
+	return db.UpdateStatus(writeCtx, id, pb.Experiment_COMPLETED, nil)
+}
+
+// SetExecutionID records the run's execution on the experiment. Like
+// Complete, it writes on a context detached from ctx and bounded by
+// StatusWriteTimeout, so a client that left during the run doesn't lose it.
 func (db *Experiment) SetExecutionID(ctx context.Context, id, executionID string) error {
-	_, err := db.Conn.Exec(ctx,
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), StatusWriteTimeout)
+	defer cancel()
+	_, err := db.Conn.Exec(writeCtx,
 		`UPDATE strategy_experiment SET execution_id=$2 WHERE id=$1`,
 		id, executionID,
 	)

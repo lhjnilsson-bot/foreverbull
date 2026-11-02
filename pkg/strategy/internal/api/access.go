@@ -10,12 +10,14 @@ import (
 
 	"github.com/lhjnilsson/foreverbull/internal/auth"
 	"github.com/lhjnilsson/foreverbull/internal/environment"
+	"github.com/lhjnilsson/foreverbull/internal/usercopy"
 	common "github.com/lhjnilsson/foreverbull/pkg/pb"
 	service "github.com/lhjnilsson/foreverbull/pkg/pb/service"
 	pb "github.com/lhjnilsson/foreverbull/pkg/pb/strategy"
 	servicePb "github.com/lhjnilsson/foreverbull/pkg/pb/strategy/service"
 	"github.com/lhjnilsson/foreverbull/pkg/strategy/internal/repository"
 	"github.com/lhjnilsson/foreverbull/pkg/strategy/internal/stream"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -133,8 +135,11 @@ func (s *StrategyServer) createExperimentAuthed(
 	experiment.Status = pb.Experiment_RUNNING
 	rsp.RUNNING.State = common.State_STATE_RUNNING
 	rsp.Experiment = experiment
+	run := experimentRun{id: experiment.GetId(), strategy: req.GetStrategyName(), backtest: req.GetBacktestName()}
 	if err := serverStream.Send(rsp); err != nil {
-		return fmt.Errorf("send running: %w", err)
+		// The run isn't started when fbull can't be told it is running.
+		return experimentRunError(run, failExperiment(ctx, &experiments, run,
+			usercopy.CauseStartNotSent, fmt.Errorf("send running: %w", err)))
 	}
 	out, runErr := s.launcher.Run(ctx, stream.RunInput{
 		ExperimentID: experiment.GetId(),
@@ -144,21 +149,14 @@ func (s *StrategyServer) createExperimentAuthed(
 	})
 	if out != nil && out.ExecutionID != "" {
 		if err := experiments.SetExecutionID(ctx, experiment.GetId(), out.ExecutionID); err != nil {
-			failErr := fmt.Errorf("set experiment execution id: %w", err)
-			_ = experiments.UpdateStatus(ctx, experiment.GetId(), pb.Experiment_FAILED, failErr)
-			return status.Error(codes.Internal, failErr.Error())
+			return experimentRunError(run, failExperiment(ctx, &experiments, run,
+				usercopy.CauseExecutionNotStored, fmt.Errorf("set experiment execution id: %w", err)))
 		}
 	}
 	if runErr != nil {
-		_ = experiments.UpdateStatus(ctx, experiment.GetId(), pb.Experiment_FAILED, runErr)
-		rsp.RUNNING.State = common.State_STATE_FAILED
-		rsp.RUNNING.Message = runErr.Error()
-		experiment, _ = experiments.Get(ctx, experiment.GetId())
-		rsp.Experiment = experiment
-		_ = serverStream.Send(rsp)
-		return status.Errorf(codes.Internal, "run experiment: %v", runErr)
+		return failExperimentRun(ctx, serverStream, rsp, &experiments, run, runErr)
 	}
-	if err := experiments.UpdateStatus(ctx, experiment.GetId(), pb.Experiment_COMPLETED, nil); err != nil {
+	if err := experiments.Complete(ctx, experiment.GetId()); err != nil {
 		return status.Errorf(codes.Internal, "complete experiment: %v", err)
 	}
 	experiment, err = experiments.Get(ctx, experiment.GetId())
@@ -361,8 +359,11 @@ func (s *StrategyServer) deployAuthed(ctx context.Context, req *servicePb.Deploy
 	}
 	if s.runner != nil {
 		if err := s.runner.Add(ctx, deployment); err != nil {
-			_ = deployments.UpdateStatus(ctx, deployment.GetId(), pb.Deployment_ERROR, err)
-			return nil, status.Errorf(codes.Internal, "start deployment runner: %v", err)
+			failErr := deployments.Fail(ctx, deployment.GetId(), err)
+			notStored := repository.StatusNotStored(failErr)
+			log.Error().Err(failErr).Str("deployment", deployment.GetId()).Bool("error_not_stored", notStored).
+				Msg("error starting deployment runner")
+			return nil, status.Error(codes.Internal, usercopy.DeploymentStartFailed(req.GetStrategyName(), notStored))
 		}
 	}
 	return &servicePb.DeployResponse{Deployment: deployment}, nil

@@ -164,6 +164,18 @@ func (db *Deployment) UpdateStatus(ctx context.Context, id string, status pb.Dep
 	return nil
 }
 
+// Fail stores cause on the deployment as ERROR and returns cause. The write
+// is detached from ctx like Experiment.Fail. When the status can't be
+// written, it returns a *StatusNotStoredError naming both.
+func (db *Deployment) Fail(ctx context.Context, id string, cause error) error {
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), StatusWriteTimeout)
+	defer cancel()
+	if err := db.UpdateStatus(writeCtx, id, pb.Deployment_ERROR, cause); err != nil {
+		return &StatusNotStoredError{Cause: cause, Err: err, what: fmt.Sprintf("deployment %s couldn't be marked as an error", id)}
+	}
+	return cause
+}
+
 func (db *Deployment) Stop(ctx context.Context, id string) error {
 	_, err := db.Conn.Exec(ctx,
 		`UPDATE strategy_deployment SET status=$2, stopped_at=NOW() WHERE id=$1`,
