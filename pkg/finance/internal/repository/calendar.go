@@ -56,6 +56,9 @@ func (db *Calendar) ListCalendarDates(ctx context.Context, calendarCode string, 
 		cd.Close = timestamppb.New(close)
 		dates = append(dates, &cd)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read calendar dates: %w", err)
+	}
 	return dates, nil
 }
 

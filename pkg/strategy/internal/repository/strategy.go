@@ -122,6 +122,9 @@ func parseStrategyRows(rows pgx.Rows) ([]*pb.Strategy, error) {
 		s.CreatedAt = internal_pb.TimeToProtoTimestamp(createdAt)
 		strategies = append(strategies, &s)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read strategies: %w", err)
+	}
 
 	return strategies, nil
 }

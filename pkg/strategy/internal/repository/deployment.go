@@ -241,6 +241,9 @@ func parseDeploymentRows(rows pgx.Rows) ([]*pb.Deployment, error) {
 		fillDeployment(&d, symbols, errText, lastSession, startedAt, stoppedAt)
 		deployments = append(deployments, &d)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read strategy deployments: %w", err)
+	}
 
 	return deployments, nil
 }
