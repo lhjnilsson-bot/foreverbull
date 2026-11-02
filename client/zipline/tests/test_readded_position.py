@@ -121,7 +121,12 @@ def _ingester(sessions: pd.DatetimeIndex, xyz_intervals: list[tuple[date, date |
             )
         ],
     )
-    return SQLIngester(backtest, engine=engine, aliases=_aliases(xyz_intervals))
+    return SQLIngester(
+        backtest,
+        engine=engine,
+        aliases=_aliases(xyz_intervals),
+        events=pd.DataFrame(columns=pd.Index(["symbol", "kind", "on_date", "evidence"])),
+    )
 
 
 def _run(sessions: pd.DatetimeIndex) -> pd.DataFrame:

@@ -91,7 +91,12 @@ def _backtest(name: str) -> backtest_pb.Backtest:
 
 
 def _ingest(name: str, frames: dict[str, pd.DataFrame]) -> tuple[Any, SQLIngester]:
-    ingester = SQLIngester(_backtest(name), engine=OHLCRows(frames), aliases=pd.DataFrame())
+    ingester = SQLIngester(
+        _backtest(name),
+        engine=OHLCRows(frames),
+        aliases=pd.DataFrame(),
+        events=pd.DataFrame(columns=pd.Index(["symbol", "kind", "on_date", "evidence"])),
+    )
     bundles.register(name, ingester, calendar_name="XNYS")
     try:
         bundles.ingest(name, os.environ, pd.Timestamp("2021-12-01", tz="UTC"), [], False)

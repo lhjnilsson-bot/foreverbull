@@ -25,6 +25,10 @@ META_ISIN = "US30303M1027"
 AAPL_ISIN = "US0378331005"
 
 
+def _no_events() -> pd.DataFrame:
+    return pd.DataFrame(columns=pd.Index(["symbol", "kind", "on_date", "evidence"]))
+
+
 def _bars(symbol: str, days: list[date], price: float) -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -120,18 +124,23 @@ def test_membership_auto_close_date_is_the_drop_or_the_day_after_the_last_bar():
     newest = pd.Timestamp("2023-12-29")
     bundle_end = date(2023, 12, 31)
 
-    def close(end, dropped):
-        return membership_auto_close_date(end, dropped, newest_member_end=newest, bundle_end=bundle_end)
+    def close(end, dropped, *, delisted=False):
+        return membership_auto_close_date(
+            end, dropped, newest_member_end=newest, bundle_end=bundle_end, delisted=delisted
+        )
 
     # The stored data ends here: no early close, only a drop closes it.
     assert close(newest, None) == pd.Timestamp("2024-01-01")
     assert close(newest, date(2023, 2, 28)) == pd.Timestamp("2023-02-28")
-    # Delisted mid-month: the bars end before the newest member bar and
-    # before the month-end drop, so the position closes the day after the
-    # last bar, when the broker leaves the member out.
-    assert close(pd.Timestamp("2023-02-10"), date(2023, 2, 28)) == pd.Timestamp("2023-02-11")
-    assert close(pd.Timestamp("2023-02-10"), None) == pd.Timestamp("2023-02-11")
-    assert close(pd.Timestamp("2023-02-10"), date(2023, 2, 5)) == pd.Timestamp("2023-02-05")
+    # Bars that stop early are not a delisting. The position stays until the
+    # drop, or until the day after the bundle ends.
+    assert close(pd.Timestamp("2023-02-10"), None) == pd.Timestamp("2024-01-01")
+    assert close(pd.Timestamp("2023-02-10"), date(2023, 2, 28)) == pd.Timestamp("2023-02-28")
+    # A confirmed delisting closes the day after the last bar, or on the
+    # drop when that is earlier.
+    assert close(pd.Timestamp("2023-02-10"), date(2023, 2, 28), delisted=True) == pd.Timestamp("2023-02-11")
+    assert close(pd.Timestamp("2023-02-10"), None, delisted=True) == pd.Timestamp("2023-02-11")
+    assert close(pd.Timestamp("2023-02-10"), date(2023, 2, 5), delisted=True) == pd.Timestamp("2023-02-05")
 
 
 def test_group_symbols_by_instrument_keeps_rename_on_one_sid():
@@ -198,7 +207,7 @@ def test_sql_ingester_one_sid_for_ticker_change_and_autoclose_on_drop():
             "member_to": [None, None, date(2023, 2, 28)],
         }
     )
-    ingester = SQLIngester(_backtest(), engine=engine, aliases=aliases)
+    ingester = SQLIngester(_backtest(), engine=engine, aliases=aliases, events=_no_events())
     ingester._df_metadata = ingester.create_metadata()
     ingested = list(ingester.writer(False))
     metadata = pd.DataFrame(ingester._df_metadata)
@@ -233,7 +242,7 @@ def test_sql_ingester_sets_auto_close_when_no_membership_table():
             "OEF": _session_bars("OEF", date(2022, 12, 1), date(2023, 2, 28), 13.0),
         }
     )
-    ingester = SQLIngester(_backtest(), engine=engine, aliases=pd.DataFrame())
+    ingester = SQLIngester(_backtest(), engine=engine, aliases=pd.DataFrame(), events=_no_events())
     ingester._df_metadata = ingester.create_metadata()
     list(ingester.writer(False))
     metadata = pd.DataFrame(ingester._df_metadata)
@@ -265,7 +274,7 @@ def test_sql_ingester_aligns_bars_to_the_first_session():
             "OEF": _bars_at_open(days, 13.0),
         }
     )
-    ingester = SQLIngester(_backtest(), engine=engine, aliases=pd.DataFrame())
+    ingester = SQLIngester(_backtest(), engine=engine, aliases=pd.DataFrame(), events=_no_events())
     ingester._df_metadata = ingester.create_metadata()
     ingested = list(ingester.writer(False))
     metadata = pd.DataFrame(ingester._df_metadata)
@@ -288,7 +297,7 @@ def test_sql_ingester_names_every_symbol_without_bars_and_writes_nothing():
             "OEF": _session_bars("OEF", date(2022, 12, 1), date(2023, 2, 28), 13.0),
         }
     )
-    ingester = SQLIngester(_backtest(), engine=engine, aliases=pd.DataFrame())
+    ingester = SQLIngester(_backtest(), engine=engine, aliases=pd.DataFrame(), events=_no_events())
     ingester._df_metadata = ingester.create_metadata()
     written = []
 
@@ -344,7 +353,7 @@ def test_sql_ingester_names_a_renamed_symbol_without_bars_by_its_latest_ticker()
             "OEF": _session_bars("OEF", date(2024, 1, 2), date(2024, 3, 28), 13.0),
         }
     )
-    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=_meta_rename())
+    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=_meta_rename(), events=_no_events())
     ingester._df_metadata = ingester.create_metadata()
 
     with pytest.raises(PlainSentence) as error:
@@ -365,7 +374,7 @@ def test_sql_ingester_names_a_symbol_without_an_earlier_ticker_alone():
             "OEF": _session_bars("OEF", date(2024, 1, 2), date(2024, 3, 28), 13.0),
         }
     )
-    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=pd.DataFrame())
+    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=pd.DataFrame(), events=_no_events())
     ingester._df_metadata = ingester.create_metadata()
 
     with pytest.raises(PlainSentence) as error:
@@ -386,7 +395,7 @@ def test_sql_ingester_lists_a_renamed_symbol_in_the_block():
             "OEF": _bars("OEF", [], 13.0),
         }
     )
-    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=_meta_rename())
+    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=_meta_rename(), events=_no_events())
     ingester._df_metadata = ingester.create_metadata()
 
     with pytest.raises(PlainSentence) as error:
@@ -412,7 +421,7 @@ def test_sql_ingester_names_symbols_without_bars_and_gaps_in_one_error():
             "OEF": _bars("OEF", gapped, 13.0),
         }
     )
-    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=_meta_rename())
+    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=_meta_rename(), events=_no_events())
     ingester._df_metadata = ingester.create_metadata()
     written = []
 
@@ -439,7 +448,7 @@ def test_sql_ingester_writes_nothing_when_a_later_sid_has_a_gap():
             "OEF": _bars("OEF", gapped, 13.0),
         }
     )
-    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=_meta_rename())
+    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=_meta_rename(), events=_no_events())
     ingester._df_metadata = ingester.create_metadata()
     written = []
 
@@ -454,6 +463,33 @@ def test_sql_ingester_writes_nothing_when_a_later_sid_has_a_gap():
 class _BrokenDatabase:
     def __init__(self):
         self._engine = create_engine("sqlite://")
+
+
+def test_load_events_raises_when_the_engine_is_missing():
+    ingester = SQLIngester(_backtest(), engine=FakeEngine({}))
+
+    with pytest.raises(PlainSentence) as error:
+        ingester.load_events()
+
+    assert str(error.value) == (
+        "Couldn't load data for backtest 'sp100': foreverbull couldn't read "
+        "which symbols were listed or delisted. The backtest wasn't saved. "
+        "Run `fbenv status` to check that the environment is running, then run `fbull backtest create` again."
+    )
+
+
+def test_load_events_raises_when_the_kind_column_is_missing():
+    ingester = SQLIngester(_backtest(), engine=FakeEngine({}), events=pd.DataFrame({"symbol": ["XYZ"]}))
+
+    with pytest.raises(PlainSentence) as error:
+        ingester.load_events()
+
+    assert "couldn't read which symbols were listed or delisted" in str(error.value)
+
+
+def test_load_events_accepts_an_empty_frame_with_a_kind_column():
+    ingester = SQLIngester(_backtest(), engine=FakeEngine({}), events=_no_events())
+    assert ingester._delisted_symbols() == set()
 
 
 def test_sql_ingester_fails_when_the_ticker_history_cant_be_read(caplog):

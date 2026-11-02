@@ -114,7 +114,16 @@ def reuse_bundle(tmp_path, monkeypatch):
             "member_to": [None, None, None, None],
         }
     )
-    bundles.register(BUNDLE, SQLIngester(_backtest(), engine=engine, aliases=aliases), calendar_name="XNYS")
+    bundles.register(
+        BUNDLE,
+        SQLIngester(
+            _backtest(),
+            engine=engine,
+            aliases=aliases,
+            events=pd.DataFrame(columns=pd.Index(["symbol", "kind", "on_date", "evidence"])),
+        ),
+        calendar_name="XNYS",
+    )
     try:
         bundles.ingest(BUNDLE, os.environ, pd.Timestamp("2021-12-01", tz="UTC"), [], False)
         yield sessions, before, after
