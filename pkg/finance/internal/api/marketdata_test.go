@@ -1260,10 +1260,10 @@ func (suite *MarketdataTest) TestDownloadHistoricalDataRescalesAfterSplit() {
 	suite.InDelta(124.8075, closeAug28, 0.0001)
 }
 
-// The first ask fails with an error that isn't a timeout, and the retry runs
-// out of time. A timeout says nothing about whether the provider has bars for
-// the symbol, so the symbol fails with the download error and no later
-// ticker is looked up for it.
+// The first ask is Yahoo's Not Found, and the retry runs out of time. A
+// timeout says nothing about whether the provider has bars for the symbol,
+// so the symbol fails with the download error and no later ticker is looked
+// up for it.
 func (suite *MarketdataTest) TestDownloadHistoricalDataFailsWhenTheRetryTimesOut() {
 	ctx := context.Background()
 	instruments := repository.Instruments{Conn: suite.pgx}
@@ -1276,7 +1276,7 @@ func (suite *MarketdataTest) TestDownloadHistoricalDataFailsWhenTheRetryTimesOut
 
 	suite.marketdata.On("GetAsset", mock.Anything, "FB").Return(&pb.Asset{Symbol: "FB", Name: "Meta Platforms, Inc."}, nil)
 	suite.marketdata.On("GetOHLC", mock.Anything, "FB", mock.Anything, mock.Anything).
-		Return(nil, errors.New("fail to get OHLC data for symbol FB: 500 Internal Server Error")).Once()
+		Return(nil, yahooNotFound("FB")).Once()
 	suite.marketdata.On("GetOHLC", mock.Anything, "FB", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("fail to get OHLC data for symbol FB: %w", context.DeadlineExceeded)).Once()
 	// The later-ticker lookup would ask for these; it must not run.
@@ -1318,8 +1318,8 @@ func (suite *MarketdataTest) TestDownloadHistoricalDataFailsWhenTheRetryTimesOut
 	}
 }
 
-// The first ask fails with an error that isn't a timeout, and the client
-// cancels the download before the retry. The download stops with the
+// The first ask is Yahoo's Not Found, and the client cancels the download
+// before the retry. The download stops with the
 // cancelled status: no later ticker is looked up for the symbol, and no
 // alias, asset or bars are recorded for one.
 func (suite *MarketdataTest) TestDownloadHistoricalDataStopsWhenCancelledBeforeTheRetry() {
@@ -1343,7 +1343,7 @@ func (suite *MarketdataTest) TestDownloadHistoricalDataStopsWhenTheDeadlinePasse
 const ohlcRetryWait = 400 * time.Millisecond
 
 // downloadEndsBeforeTheRetry downloads FB under downloadCtx. The first ask
-// fails with a 500 and ends downloadCtx (end cancels it; a deadline ends it
+// is Yahoo's Not Found and ends downloadCtx (end cancels it; a deadline ends it
 // by itself), then checks the stream ends with code (and text, unless it is
 // empty) and that nothing of the later ticker META was asked for or stored.
 func (suite *MarketdataTest) downloadEndsBeforeTheRetry(downloadCtx context.Context, end func(),
@@ -1366,7 +1366,7 @@ func (suite *MarketdataTest) downloadEndsBeforeTheRetry(downloadCtx context.Cont
 			// Let the end reach the server's stream ctx before the retry.
 			time.Sleep(50 * time.Millisecond)
 		}).
-		Return(nil, errors.New("fail to get OHLC data for symbol FB: 500 Internal Server Error")).Once()
+		Return(nil, yahooNotFound("FB")).Once()
 	// The later-ticker lookup would ask for these; it must not run.
 	suite.marketdata.On("SearchAsset", mock.Anything, mock.Anything).Return([]*pb.Asset{
 		{Symbol: "META", Name: "Meta Platforms, Inc.", ISIN: metaISIN},

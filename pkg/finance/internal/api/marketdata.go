@@ -356,42 +356,14 @@ func (fs *MarketdataServer) downloadSymbol(
 	}
 
 	storeSymbol := asset.Symbol
-	ohlcs, err := bars.GetOHLC(ctx, storeSymbol, start, end)
+	ohlcs, err := askedTickerBars(ctx, bars, symbol, provider, storeSymbol, start, end)
 	if err != nil {
 		var blocked *marketdata.BlockedError
 		if errors.As(err, &blocked) {
 			return blocked
 		}
-		// A provider that didn't answer in time would likely not answer for
-		// a later ticker either, so the symbol fails with the timeout.
-		if providerTimedOut(ctx, err) {
-			failSymbol(ctx, sender, rsp, &marketdata.TimeoutError{Provider: provider, Symbol: symbol})
-			return nil
-		}
-	}
-	if err != nil || len(ohlcs) == 0 {
-		// Yahoo sometimes answers a listed symbol (BK) with no data. Ask once
-		// more before treating it as renamed or missing.
-		ohlcs, err = retryOHLC(ctx, bars, storeSymbol, start, end)
-		if err != nil {
-			var blocked *marketdata.BlockedError
-			if errors.As(err, &blocked) {
-				return blocked
-			}
-			// A session with no price fails the symbol after the one retry;
-			// a later ticker can't fill it.
-			if refused := missingPriceDownloadError(symbol, provider, err); refused != nil {
-				failSymbol(ctx, sender, rsp, refused)
-				return nil
-			}
-			if !noBarsAnswer(err) {
-				// The request failed; we don't know whether the symbol has
-				// prices, so report the failure, not "no price data".
-				failSymbol(ctx, sender, rsp, internalDownloadError(symbol, "get ohlc", err))
-				return nil
-			}
-			ohlcs = nil
-		}
+		failSymbol(ctx, sender, rsp, err)
+		return nil
 	}
 	if len(ohlcs) == 0 {
 		// A download that already ended looks up no later ticker. Like the
@@ -480,8 +452,76 @@ func missingPriceDownloadError(symbol, provider string, err error) error {
 	return &marketdata.MissingPriceError{Provider: provider, Symbol: symbol, Days: missing.Days}
 }
 
+// askedTickerBars fetches the bars of the asked ticker. Empty bars with a
+// nil error are the provider's answer that it has none (an empty answer,
+// or ErrNoBars such as Yahoo's Not Found or Stooq's No data). That is the
+// only result that opens the later-ticker lookup: a rename shows up as no
+// bars, and nothing else does. Every other failure is returned for the
+// symbol to fail with; a *marketdata.BlockedError is returned as is.
+func askedTickerBars(ctx context.Context, bars supplier.Marketdata, symbol, provider, storeSymbol string,
+	start time.Time, end *time.Time,
+) ([]*pb.OHLC, error) {
+	ohlcs, err := bars.GetOHLC(ctx, storeSymbol, start, end)
+	if err == nil && len(ohlcs) > 0 {
+		return ohlcs, nil
+	}
+	// A failed request (HTTP 401, a 429 after the provider's own retries,
+	// 5xx, a refused connection, a timeout or a cancelled download) says
+	// nothing about whether the ticker has prices. It fails the symbol at
+	// once: no retry and no later ticker.
+	firstMissing := missingPriceDownloadError(symbol, provider, err)
+	if err != nil && !noBarsAnswer(err) && firstMissing == nil {
+		return nil, askedTickerFailure(ctx, symbol, provider, err)
+	}
+	// Yahoo sometimes answers a listed symbol (BK) with no data, and a bar
+	// with no price gets one more ask too (universe.md §7.5). Ask once more
+	// before treating the ticker as renamed or missing.
+	ohlcs, err = retryOHLC(ctx, bars, storeSymbol, start, end)
+	if err == nil && len(ohlcs) > 0 {
+		return ohlcs, nil
+	}
+	// The first ask had bars with a gap and the retry has none. The two
+	// answers disagree, so this is not a rename: the symbol fails with the
+	// first ask's missing days and no later ticker is looked up.
+	if firstMissing != nil && (err == nil || noBarsAnswer(err)) {
+		return nil, firstMissing
+	}
+	if err == nil {
+		return nil, nil
+	}
+	var blocked *marketdata.BlockedError
+	if errors.As(err, &blocked) {
+		return nil, blocked
+	}
+	// A session with no price fails the symbol after the one retry; a
+	// later ticker can't fill it.
+	if refused := missingPriceDownloadError(symbol, provider, err); refused != nil {
+		return nil, refused
+	}
+	if noBarsAnswer(err) {
+		return nil, nil
+	}
+	// The retry failed; we don't know whether the symbol has prices, so
+	// report the failure, not "no price data".
+	return nil, internalDownloadError(symbol, "get ohlc", err)
+}
+
+// askedTickerFailure is the error a failed first ask for the asked ticker
+// fails the symbol with: the provider's block, its timeout, or the generic
+// download failure with the cause in the log.
+func askedTickerFailure(ctx context.Context, symbol, provider string, err error) error {
+	var blocked *marketdata.BlockedError
+	if errors.As(err, &blocked) {
+		return blocked
+	}
+	if providerTimedOut(ctx, err) {
+		return &marketdata.TimeoutError{Provider: provider, Symbol: symbol}
+	}
+	return internalDownloadError(symbol, "get ohlc", err)
+}
+
 // ohlcRetryDelay is the pause before asking a provider again after it
-// returned no bars.
+// returned no bars or a bar with no price.
 const ohlcRetryDelay = 250 * time.Millisecond
 
 // retryOHLC asks for the bars a second time after a short pause.
