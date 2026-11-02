@@ -60,9 +60,18 @@ message DownloadHistoricalDataResponse {
     STATUS_OK = 1;
     STATUS_ERROR = 2;
   }
+  // ProviderStatus is the price provider's HTTP error status for the
+  // symbol's bars, after the provider's bounded retries.
+  message ProviderStatus {
+    string provider = 1;
+    int32 http_status = 2;
+  }
   string symbol = 1;
   Status status = 2;
   string error = 3;
+  // provider_status is set with STATUS_ERROR when the provider answered
+  // with an error status. Callers name the cause from it, not from error.
+  ProviderStatus provider_status = 4;
 }
 
 // GetOHLC reads bars already stored in the broker database.
