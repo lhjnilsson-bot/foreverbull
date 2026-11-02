@@ -838,7 +838,8 @@ func (test *BacktestCommandTest) TestEmptyPeriodWithNoTradingDayFailsBeforeTheDo
 
 // The check stops at the last completed session: at 14:00 New York on
 // 2024-03-28, that day's session hasn't closed, so its missing bar is not a
-// gap, and the calendar is read only to 2024-03-27.
+// gap, and the calendar is read only to 2024-03-27. The session left out
+// is the step's notice.
 func (test *BacktestCommandTest) TestMissingSessionsStopAtTheLastCompletedSession() {
 	test.fixClock(time.Date(2024, 3, 28, 18, 0, 0, 0, time.UTC))
 	test.createQuarter("AAPL")
@@ -847,7 +848,8 @@ func (test *BacktestCommandTest) TestMissingSessionsStopAtTheLastCompletedSessio
 	test.storeBars("AAPL", "2024-01-01", "2024-03-27")
 
 	ziplineEngine, err := test.download(time.Date(2024, 3, 27, 0, 0, 0, 0, time.UTC))
-	test.Require().NoError(err)
+	test.requireNotice(err, "2024-03-28 isn't included because its trading session hasn't closed yet "+
+		"(sessions count as closed at 16:30 New York time).")
 	ziplineEngine.AssertCalled(test.T(), "Sessions", mock.Anything, quarterStart, time.Date(2024, 3, 27, 0, 0, 0, 0, time.UTC))
 	ziplineEngine.AssertNotCalled(test.T(), "Sessions", mock.Anything, quarterStart, quarterEnd)
 }

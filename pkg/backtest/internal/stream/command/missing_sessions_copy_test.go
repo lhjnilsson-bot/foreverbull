@@ -135,3 +135,19 @@ func TestEmptyPeriodMessages(t *testing.T) {
 		"oef-2024q1` first. Choose dates that include a trading day, then run `fbull backtest create` again.",
 		noSessionMessage("oef-2024q1", copyDay(t, "2024-03-30"), copyDay(t, "2024-03-31"), false))
 }
+
+// A backtest that ends after the market calendar's last trading day names
+// both dates, whether or not it could be removed.
+func TestPastCalendarMessage(t *testing.T) {
+	t.Parallel()
+	end, last := copyDay(t, "2027-12-17"), copyDay(t, "2027-11-02")
+	require.Equal(t, "Couldn't load data for backtest 'oef-2024q1': it ends on 2027-12-17, after the last trading "+
+		"day in foreverbull's market calendar (2027-11-02). The backtest wasn't saved. Choose an end on or before "+
+		"2027-11-02, then run `fbull backtest create` again.",
+		pastCalendarMessage("oef-2024q1", end, last, true))
+	require.Equal(t, "Couldn't load data for backtest 'oef-2024q1': it ends on 2027-12-17, after the last trading "+
+		"day in foreverbull's market calendar (2027-11-02). The backtest was partly saved and couldn't be removed. "+
+		"Run `fbull backtest delete oef-2024q1` first. Choose an end on or before 2027-11-02, then run "+
+		"`fbull backtest create` again.",
+		pastCalendarMessage("oef-2024q1", end, last, false))
+}
