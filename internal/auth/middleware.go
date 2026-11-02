@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/lhjnilsson/foreverbull/internal/environment"
 	"github.com/lhjnilsson/foreverbull/internal/postgres"
 	"github.com/lhjnilsson/foreverbull/internal/web"
+	"github.com/rs/zerolog/log"
 )
 
 // Protect refuses /api routes that are not anonymous unless the cookie is valid.
@@ -26,9 +28,16 @@ func Protect(db postgres.Query) func(http.Handler) http.Handler {
 				return
 			}
 			account, err := AccountFromRequest(r.Context(), db, r, time.Now())
-			if err != nil {
+			if errors.Is(err, ErrUnauthorized) {
 				ClearSessionCookie(w, r)
 				web.Unauthorized(w)
+				return
+			}
+			if err != nil {
+				// A failed lookup is not a bad cookie: keep the cookie, so a
+				// database fault doesn't sign the user out, and answer 500.
+				log.Error().Err(err).Str("path", r.URL.Path).Msg("session lookup failed")
+				web.WriteError(w, err)
 				return
 			}
 			r = r.WithContext(WithAccount(r.Context(), account))
