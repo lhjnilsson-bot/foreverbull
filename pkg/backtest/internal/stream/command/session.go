@@ -120,10 +120,21 @@ func SessionRun(ctx context.Context, msg stream.Message) error {
 		}
 	}()
 
-	if inErr := sessions.UpdatePort(ctx, command.SessionID, port); inErr != nil {
-		log.Err(inErr).Msg("error updating session status")
-	}
+	return publishSessionPort(ctx, &sessions, server, command.SessionID, port)
+}
 
+type sessionPortStore interface {
+	UpdatePort(ctx context.Context, sessionID string, port int) error
+}
+
+// publishSessionPort stores the port the session server listens on. No
+// client can reach a server whose port isn't stored, so a failed write
+// stops the server and fails the command.
+func publishSessionPort(ctx context.Context, sessions sessionPortStore, server *grpc.Server, sessionID string, port int) error {
+	if err := sessions.UpdatePort(ctx, sessionID, port); err != nil {
+		server.Stop()
+		return stream.Unreachable(fmt.Errorf("error storing session port: %w", err))
+	}
 	return nil
 }
 

@@ -158,6 +158,7 @@ func (s *StrategyServer) CreateExperiment(
 	}
 	out, runErr := s.launcher.Run(ctx, stream.RunInput{
 		ExperimentID: experiment.Id,
+		StrategyName: req.GetStrategyName(),
 		BacktestName: req.GetBacktestName(),
 		ServiceImage: version.ServiceImage,
 	})

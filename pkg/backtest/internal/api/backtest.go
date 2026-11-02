@@ -10,6 +10,7 @@ import (
 	"github.com/lhjnilsson/foreverbull/internal/environment"
 	"github.com/lhjnilsson/foreverbull/internal/stream"
 	internalPb "github.com/lhjnilsson/foreverbull/internal/stream/pb"
+	"github.com/lhjnilsson/foreverbull/internal/usercopy"
 	"github.com/lhjnilsson/foreverbull/pkg/backtest/internal/repository"
 	backtestStream "github.com/lhjnilsson/foreverbull/pkg/backtest/stream"
 	"github.com/lhjnilsson/foreverbull/pkg/pb"
@@ -234,7 +235,7 @@ func (bs *BacktestServer) CreateSession(
 
 	err = bs.stream.Publish(ctx, msg, stream.WaitForCompletion())
 	if err != nil {
-		return fmt.Errorf("error publishing session run command: %w", err)
+		return sessionRunError(session.Backtest, err)
 	}
 
 	session, err = sessions.Get(ctx, session.Id)
@@ -342,4 +343,14 @@ func (bs *BacktestServer) GetExecution(ctx context.Context,
 		Functions: functions,
 		Provider:  provider,
 	}, nil
+}
+
+// sessionRunError is the error CreateSession returns when the session run
+// command failed. Services that couldn't reach each other are named for
+// the user; anything else stays an internal error.
+func sessionRunError(backtest string, err error) error {
+	if errors.Is(err, stream.ErrServicesUnreachable) {
+		return status.Error(codes.Unavailable, usercopy.BacktestRunUnreachable(backtest, "fbull backtest run "+backtest))
+	}
+	return fmt.Errorf("error publishing session run command: %w", err)
 }

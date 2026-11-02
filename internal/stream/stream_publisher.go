@@ -135,7 +135,7 @@ func WaitForCompletion(onProgress ...func(text string)) PublishOpt {
 					if state.GetError() == "" {
 						return errors.New("command failed")
 					}
-					return errors.New(state.GetError())
+					return commandError(state.GetError())
 				case pb.State_STATE_CANCELED:
 					return fmt.Errorf("canceled")
 				case pb.State_STATE_UNSPECIFIED, pb.State_STATE_CREATED,

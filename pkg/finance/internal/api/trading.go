@@ -9,6 +9,8 @@ import (
 	"github.com/lhjnilsson/foreverbull/internal/auth"
 	"github.com/lhjnilsson/foreverbull/internal/environment"
 	"github.com/lhjnilsson/foreverbull/internal/stream"
+	streamPb "github.com/lhjnilsson/foreverbull/internal/stream/pb"
+	"github.com/lhjnilsson/foreverbull/internal/usercopy"
 	"github.com/lhjnilsson/foreverbull/pkg/finance/internal/repository"
 	financeStream "github.com/lhjnilsson/foreverbull/pkg/finance/stream"
 	"github.com/lhjnilsson/foreverbull/pkg/finance/supplier"
@@ -16,6 +18,7 @@ import (
 	servicePb "github.com/lhjnilsson/foreverbull/pkg/pb/finance/service"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type TradingServer struct {
@@ -127,7 +130,7 @@ func (ts *TradingServer) CreateSession(req *servicePb.CreateSessionRequest, serv
 	}
 	ch := ts.stream.RunOrchestration(ctx, o)
 	for msg := range ch {
-		if err := stream.UpdateOrchestration(rsp, msg); err != nil {
+		if err := stream.UpdateOrchestration(rsp, tradingStep(msg, s.GetId())); err != nil {
 			return fmt.Errorf("error updating orchestration: %w", err)
 		}
 		rsp.Session, err = sessions.Get(ctx, s.GetId())
@@ -141,6 +144,18 @@ func (ts *TradingServer) CreateSession(req *servicePb.CreateSessionRequest, serv
 	}
 	published = true
 	return nil
+}
+
+// tradingStep names the session in a step that failed because the services
+// couldn't reach each other; the step's message is what the client prints.
+func tradingStep(step *streamPb.Orchestration_Step, sessionID string) *streamPb.Orchestration_Step {
+	if step.GetError() != usercopy.ServicesUnreachable {
+		return step
+	}
+	named := proto.Clone(step).(*streamPb.Orchestration_Step) //nolint:forcetypeassert // Clone keeps the type
+	text := usercopy.TradingSessionUnreachable(sessionID)
+	named.Error = &text
+	return named
 }
 
 func stampTradingSecret(rsp *servicePb.CreateSessionResponse, secret string) {

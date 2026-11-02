@@ -27,6 +27,8 @@ func NewExperimentRunCommand(experimentID string) (stream.Message, error) {
 // RunInput is one experiment against an existing backtest universe.
 type RunInput struct {
 	ExperimentID string
+	// StrategyName names the strategy in the user's step; it may be empty.
+	StrategyName string
 	BacktestName string
 	BacktestID   string
 	ServiceImage string
