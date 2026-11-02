@@ -1,0 +1,58 @@
+[
+  {
+    "sha": "c109000000000000000000000000000000000001",
+    "parents": [
+      {
+        "sha": "e843c44000000000000000000000000000000000"
+      }
+    ],
+    "author": {
+      "login": "maintainer"
+    },
+    "committer": {
+      "login": "maintainer"
+    },
+    "commit": {
+      "author": {
+        "name": "maintainer",
+        "email": "maintainer@example.com"
+      },
+      "committer": {
+        "name": "maintainer",
+        "email": "maintainer@example.com"
+      },
+      "verification": {
+        "verified": false,
+        "reason": "unsigned"
+      }
+    }
+  },
+  {
+    "sha": "c109000000000000000000000000000000000002",
+    "parents": [
+      {
+        "sha": "c109000000000000000000000000000000000001"
+      }
+    ],
+    "author": {
+      "login": "cursoragent"
+    },
+    "committer": {
+      "login": "cursoragent"
+    },
+    "commit": {
+      "author": {
+        "name": "Cursor Agent",
+        "email": "cursoragent@cursor.com"
+      },
+      "committer": {
+        "name": "Cursor Agent",
+        "email": "cursoragent@cursor.com"
+      },
+      "verification": {
+        "verified": false,
+        "reason": "unsigned"
+      }
+    }
+  }
+]

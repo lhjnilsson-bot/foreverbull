@@ -1,0 +1,28 @@
+[
+  {
+    "sha": "c107000000000000000000000000000000000000001",
+    "parents": [
+      {
+        "sha": "e843c44000000000000000000000000000000000"
+      }
+    ],
+    "author": {
+      "login": "maintainer"
+    },
+    "committer": null,
+    "commit": {
+      "author": {
+        "name": "maintainer",
+        "email": "maintainer@example.com"
+      },
+      "committer": {
+        "name": " Cursor \t Agent ",
+        "email": "agent@example.com"
+      },
+      "verification": {
+        "verified": false,
+        "reason": "unsigned"
+      }
+    }
+  }
+]

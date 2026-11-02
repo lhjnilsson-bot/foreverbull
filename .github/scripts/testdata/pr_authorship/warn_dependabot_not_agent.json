@@ -1,0 +1,30 @@
+[
+  {
+    "sha": "d102000000000000000000000000000000000000001",
+    "parents": [
+      {
+        "sha": "e843c44000000000000000000000000000000000"
+      }
+    ],
+    "author": {
+      "login": "dependabot[bot]"
+    },
+    "committer": {
+      "login": "web-flow"
+    },
+    "commit": {
+      "author": {
+        "name": "dependabot[bot]",
+        "email": "49699333+dependabot[bot]@users.noreply.github.com"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com"
+      },
+      "verification": {
+        "verified": false,
+        "reason": "unsigned"
+      }
+    }
+  }
+]

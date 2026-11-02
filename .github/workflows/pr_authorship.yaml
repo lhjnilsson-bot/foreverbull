@@ -2,8 +2,10 @@ name: pull request authorship
 
 # Flags a pull request whose author is not the author of its commits. A bot
 # must open its own pull requests: one opened under a person's account cannot
-# be edited by the bot that wrote the commits. Mixed authorship is a warning;
-# it fails only when a bot account is on one side of the mismatch. A verified
+# be edited by the bot that wrote the commits. Any commit authored or
+# committed by a coding-agent identity (Cursor Agent) fails, whoever opened
+# the pull request. Other mixed authorship is a warning; it fails only when a
+# bot account is on one side of the mismatch. A verified
 # "Update branch" merge committed by GitHub is skipped; see
 # .github/scripts/pr_authorship.sh.
 on:

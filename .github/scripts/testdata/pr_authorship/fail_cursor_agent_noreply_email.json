@@ -1,0 +1,28 @@
+[
+  {
+    "sha": "c102000000000000000000000000000000000000001",
+    "parents": [
+      {
+        "sha": "e843c44000000000000000000000000000000000"
+      }
+    ],
+    "author": null,
+    "committer": {
+      "login": "maintainer"
+    },
+    "commit": {
+      "author": {
+        "name": "developer",
+        "email": "12345+CursorAgent@users.noreply.github.com"
+      },
+      "committer": {
+        "name": "maintainer",
+        "email": "maintainer@example.com"
+      },
+      "verification": {
+        "verified": false,
+        "reason": "unsigned"
+      }
+    }
+  }
+]

@@ -1,0 +1,58 @@
+[
+  {
+    "sha": "dddd000000000000000000000000000000000001",
+    "parents": [
+      {
+        "sha": "e843c44000000000000000000000000000000000"
+      }
+    ],
+    "author": {
+      "login": "lhjnilsson-bot"
+    },
+    "committer": {
+      "login": "lhjnilsson-bot"
+    },
+    "commit": {
+      "author": {
+        "name": "lhjnilsson-bot",
+        "email": "343091814+lhjnilsson-bot@users.noreply.github.com"
+      },
+      "committer": {
+        "name": "lhjnilsson-bot",
+        "email": "343091814+lhjnilsson-bot@users.noreply.github.com"
+      },
+      "verification": {
+        "verified": false,
+        "reason": "unsigned"
+      }
+    }
+  },
+  {
+    "sha": "dddd000000000000000000000000000000000002",
+    "parents": [
+      {
+        "sha": "dddd000000000000000000000000000000000001"
+      }
+    ],
+    "author": {
+      "login": "lhjnilsson-bot"
+    },
+    "committer": {
+      "login": "lhjnilsson-bot"
+    },
+    "commit": {
+      "author": {
+        "name": "lhjnilsson-bot",
+        "email": "343091814+lhjnilsson-bot@users.noreply.github.com"
+      },
+      "committer": {
+        "name": "lhjnilsson-bot",
+        "email": "343091814+lhjnilsson-bot@users.noreply.github.com"
+      },
+      "verification": {
+        "verified": false,
+        "reason": "unsigned"
+      }
+    }
+  }
+]
