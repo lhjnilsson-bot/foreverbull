@@ -296,20 +296,23 @@ func barsForSymbol(bars []*finance_pb.OHLC, symbol string) []*finance_pb.OHLC {
 	return matched
 }
 
+// Close closes both sockets, even when the first fails, and returns every
+// failure. A socket that was already closed is not one.
 func (p *pool) Close() error {
+	var errs []error
 	if p.Socket != nil {
 		err := p.Socket.Close()
 		if err != nil && !errors.Is(err, socket.ErrClosed) {
-			return fmt.Errorf("error closing socket: %w", err)
+			errs = append(errs, fmt.Errorf("error closing socket: %w", err))
 		}
 	}
 
 	if p.NamespaceSocket != nil {
 		err := p.NamespaceSocket.Close()
 		if err != nil && !errors.Is(err, socket.ErrClosed) {
-			return fmt.Errorf("error closing namespace socket: %w", err)
+			errs = append(errs, fmt.Errorf("error closing namespace socket: %w", err))
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
