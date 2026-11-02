@@ -2,9 +2,12 @@ package marketdata
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -12,6 +15,7 @@ import (
 	"github.com/alpacahq/alpaca-trade-api-go/v3/marketdata"
 	"github.com/lhjnilsson/foreverbull/pkg/finance/supplier"
 	pb "github.com/lhjnilsson/foreverbull/pkg/pb/finance"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -23,7 +27,18 @@ type AlpacaBars struct {
 	// limiter spaces the Alpaca requests. NewAlpacaBars sets the
 	// process-wide Alpaca limiter, so every download shares one rate.
 	limiter *requestLimiter
+	// tradingURL is the trading API origin for asset status. Empty is the
+	// paper host. Tests point it at an httptest server.
+	tradingURL string
 }
+
+// AlpacaPaperHost is the paper trading host. Asset status is read from it.
+// The paper and live hosts serve the same catalog; a live-only key can be
+// refused here, and a missing status is not inactive.
+const AlpacaPaperHost = "https://paper-api.alpaca.markets"
+
+// alpacaTradingURL is AlpacaPaperHost. Tests replace AlpacaBars.tradingURL.
+const alpacaTradingURL = AlpacaPaperHost
 
 // NewAlpacaBars builds a bars client. An empty key or secret fails before any request.
 func NewAlpacaBars(apiKey, apiSecret string) (*AlpacaBars, error) {
@@ -169,6 +184,74 @@ func (a *AlpacaBars) GetOHLC(ctx context.Context, symbol string, start time.Time
 		})
 	}
 	return ohlcs, nil
+}
+
+// AssetStatus is the trading API's asset status, "active" or "inactive".
+// Any other answer, including a missing status or a failed request, is an
+// error. It is never read as inactive.
+func (a *AlpacaBars) AssetStatus(ctx context.Context, symbol string) (string, error) {
+	asked := strings.ToUpper(strings.TrimSpace(symbol))
+	base := a.tradingURL
+	if base == "" {
+		base = alpacaTradingURL
+	}
+	endpoint := strings.TrimRight(base, "/") + "/v2/assets/" + url.PathEscape(alpacaSymbol(symbol))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", lookupTransport("asset status", asked, ctx, err)
+	}
+	req.Header.Set("APCA-API-KEY-ID", a.opts.APIKey)
+	req.Header.Set("APCA-API-SECRET-KEY", a.opts.APISecret)
+	resp, err := a.statusClient(ctx).Do(req)
+	if err != nil {
+		return "", lookupTransport("asset status", asked, ctx, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		log.Warn().Err(err).Str("symbol", asked).Msg("alpaca asset status response couldn't be read")
+		return "", fmt.Errorf("alpaca asset status for %s couldn't be read", asked)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", lookupStatus("asset status", asked, resp.StatusCode, resp.Status)
+	}
+	var payload struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		log.Warn().Err(err).Str("symbol", asked).Msg("alpaca asset status response couldn't be read")
+		return "", fmt.Errorf("alpaca asset status for %s couldn't be read", asked)
+	}
+	status := strings.ToLower(strings.TrimSpace(payload.Status))
+	switch status {
+	case "active", "inactive":
+		return status, nil
+	default:
+		log.Warn().Str("symbol", asked).Str("status", payload.Status).
+			Msg("alpaca asset status response couldn't be read")
+		return "", fmt.Errorf("alpaca asset status for %s is %q", asked, payload.Status)
+	}
+}
+
+// statusClient sends the asset-status request through the Alpaca limiter.
+// A 429 is sent again, unlike GetOHLC, whose SDK retries on its own.
+func (a *AlpacaBars) statusClient(ctx context.Context) *http.Client {
+	base := http.DefaultTransport
+	timeout := alpacaTimeout
+	if a.opts.HTTPClient != nil {
+		if a.opts.HTTPClient.Transport != nil {
+			base = a.opts.HTTPClient.Transport
+		}
+		if a.opts.HTTPClient.Timeout > 0 {
+			timeout = a.opts.HTTPClient.Timeout
+		}
+	}
+	limiter := a.limiter
+	if limiter == nil {
+		limiter = limiterFor("alpaca")
+	}
+	limited := newLimitedTransport("alpaca", limiter, base, rateLimitRetries)
+	return &http.Client{Timeout: timeout, Transport: &ctxTransport{ctx: ctx, base: limited}}
 }
 
 var _ supplier.Marketdata = (*AlpacaBars)(nil)

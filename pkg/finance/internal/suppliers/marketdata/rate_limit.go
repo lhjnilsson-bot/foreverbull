@@ -32,9 +32,10 @@ const (
 	maxRateLimitBackoff   = 30 * time.Second
 )
 
-// rateLimitRetries is how many times a Yahoo or Stooq request is sent again
-// after a 429. Alpaca's SDK already retries a 429 itself, so its transport
-// sends each request once and only slows the shared limiter down.
+// rateLimitRetries is how many times a Yahoo, Stooq, or Alpaca asset-status
+// request is sent again after a 429. Alpaca bar requests go through the SDK's
+// client, so their transport sends each request once and only slows the
+// shared limiter down.
 const rateLimitRetries = 3
 
 // requestLimiter spaces requests to one provider at least interval apart,
