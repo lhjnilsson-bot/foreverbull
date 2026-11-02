@@ -59,7 +59,7 @@ func alpacaRangeServer(t *testing.T, stamps ...time.Time) (*AlpacaBars, *[]time.
 	}))
 	t.Cleanup(srv.Close)
 	return &AlpacaBars{opts: marketdata.ClientOpts{
-		APIKey: "key", APISecret: "secret", BaseURL: srv.URL, RetryLimit: 1,
+		APIKey: "key", APISecret: "secret", BaseURL: srv.URL,
 	}}, &ends
 }
 
@@ -93,7 +93,47 @@ func TestAlpacaGetOHLCLeavesTodaysUnfinishedSessionOut(t *testing.T) {
 		require.Equal(t, []string{"2026-10-29"}, alpacaDays(t, bars, start, nil), at)
 		require.Len(t, *ends, 2)
 		for _, end := range *ends {
-			require.True(t, end.Before(today), "at %s, end %s asks for today's bar", at, end)
+			require.True(t, today.Add(-time.Nanosecond).Equal(end), "at %s, end %s, want just before today", at, end)
+		}
+	}
+}
+
+// Every Alpaca bars request ends at least alpacaRecentDataLimit before now,
+// Alpaca's free-plan limit on recent SIP data, with an end date of today
+// and with no end. During the session the end is already just before
+// midnight New York. From 16:30 it is now minus 15 minutes, still after
+// the 16:00 close, so today's bar is returned. Just after midnight it is
+// 15 minutes before now, the evening before.
+func TestAlpacaGetOHLCEndsAtLeast15MinutesBeforeNow(t *testing.T) {
+	t.Parallel()
+	yesterday := newYork(t, "2026-10-29 00:00")
+	today := newYork(t, "2026-10-30 00:00")
+	cases := []struct {
+		at   string
+		want time.Time
+		days []string
+	}{
+		{"2026-10-30 11:00", today.Add(-time.Nanosecond), []string{"2026-10-29"}},
+		{"2026-10-30 16:05", today.Add(-time.Nanosecond), []string{"2026-10-29"}},
+		{"2026-10-30 16:35", newYork(t, "2026-10-30 16:20"), []string{"2026-10-29", "2026-10-30"}},
+		{"2026-10-30 00:10", newYork(t, "2026-10-29 23:55"), []string{"2026-10-29"}},
+	}
+	start := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
+	for _, tc := range cases {
+		for name, end := range map[string]*time.Time{"end today": &endDate, "no end": nil} {
+			bars, ends := alpacaSessionServer(t, yesterday, today)
+			now := newYork(t, tc.at)
+			bars.now = func() time.Time { return now }
+
+			require.Equal(t, tc.days, alpacaDays(t, bars, start, end), "%s, %s", tc.at, name)
+			require.Len(t, *ends, 1)
+			sent := (*ends)[0]
+			require.True(t, tc.want.Equal(sent), "%s, %s: end %s, want %s", tc.at, name, sent.In(xnysZone), tc.want)
+			require.False(t, sent.After(now.Add(-alpacaRecentDataLimit)), "%s, %s", tc.at, name)
+			if tc.at == "2026-10-30 16:35" {
+				require.True(t, sent.After(newYork(t, "2026-10-30 16:00")), "the end is after today's close")
+			}
 		}
 	}
 }
@@ -156,7 +196,7 @@ func TestAlpacaGetOHLCDropsABarAfterTheLastCompletedSession(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	bars := &AlpacaBars{opts: marketdata.ClientOpts{
-		APIKey: "key", APISecret: "secret", BaseURL: srv.URL, RetryLimit: 1,
+		APIKey: "key", APISecret: "secret", BaseURL: srv.URL,
 	}}
 	start := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
 	tomorrow := time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
@@ -169,4 +209,41 @@ func TestAlpacaGetOHLCDropsABarAfterTheLastCompletedSession(t *testing.T) {
 	// From 16:30 New York today's session is completed, and its bar is kept.
 	now = newYork(t, "2026-10-30 16:35")
 	require.Equal(t, []string{"2026-10-29", "2026-10-30"}, alpacaDays(t, bars, start, nil))
+}
+
+// An end date of today, asked at 16:35 New York, is capped at 16:20, after
+// the 16:00 close, so today's bar is returned.
+func TestAlpacaGetOHLCEndDateTodayAfterTheCloseKeepsTodaysBar(t *testing.T) {
+	t.Parallel()
+	bars, ends := alpacaSessionServer(t, newYork(t, "2026-10-29 00:00"), newYork(t, "2026-10-30 00:00"))
+	now := newYork(t, "2026-10-30 16:35")
+	bars.now = func() time.Time { return now }
+	start := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
+
+	require.Equal(t, []string{"2026-10-29", "2026-10-30"}, alpacaDays(t, bars, start, &end))
+	require.Len(t, *ends, 1)
+	want := newYork(t, "2026-10-30 16:20")
+	require.True(t, want.Equal((*ends)[0]), "end %s, want %s", (*ends)[0].In(xnysZone), want)
+}
+
+// When the 15-minute cap leaves nothing after start, NothingToFetch says so
+// and GetOHLC sends Alpaca no request.
+func TestAlpacaNothingToFetchWhenTheCapEmptiesTheRange(t *testing.T) {
+	t.Parallel()
+	bars, ends := alpacaSessionServer(t, newYork(t, "2026-10-29 00:00"), newYork(t, "2026-10-30 00:00"))
+	// 2026-10-30 00:00 UTC is 20:00 New York on 10-29; the cap at 20:10
+	// ends at 19:55, before start, though the 10-29 session has completed.
+	start := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
+	now := newYork(t, "2026-10-29 20:10")
+	bars.now = func() time.Time { return now }
+
+	require.True(t, bars.NothingToFetch(start, nil))
+	require.Empty(t, alpacaDays(t, bars, start, nil))
+	require.Empty(t, *ends, "no request is sent")
+
+	// Ten minutes later the capped end, 20:05, is after start.
+	later := newYork(t, "2026-10-29 20:20")
+	bars.now = func() time.Time { return later }
+	require.False(t, bars.NothingToFetch(start, nil))
 }

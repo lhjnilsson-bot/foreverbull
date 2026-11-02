@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alpacahq/alpaca-trade-api-go/v3/alpaca"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lhjnilsson/foreverbull/internal/environment"
 	"github.com/lhjnilsson/foreverbull/internal/test_helper"
@@ -53,8 +52,17 @@ func connectionRefused() error {
 	})
 }
 
-func alpacaStatus(status int) error {
-	return fmt.Errorf("error getting bars: %w", &alpaca.APIError{StatusCode: status, Message: http.StatusText(status)})
+// alpacaStatus is the Alpaca supplier's error for an HTTP error status on
+// the bars request, after tries requests.
+func alpacaStatus(status, tries int) error {
+	return &marketdata.AlpacaBarsError{
+		Symbol: "FB", HTTPCode: status, HTTPStatus: fmt.Sprintf("%d %s", status, http.StatusText(status)), Tries: tries,
+	}
+}
+
+// alpacaDownloadCopy is the STATUS_ERROR for an Alpaca status on FB.
+func alpacaDownloadCopy(cause, step string) string {
+	return "foreverbull couldn't download prices for FB from alpaca: " + cause + ". " + step
 }
 
 // Only the provider's answer that FB has no bars (ErrNoBars or an empty
@@ -85,7 +93,9 @@ func TestDownloadSymbolLooksUpLaterTickerOnlyOnNoBars(t *testing.T) {
 		// means none is.
 		wantStatus servicePb.DownloadHistoricalDataResponse_Status
 		wantError  string
-		wantBlock  bool
+		// wantHTTP is the provider_status code sent with STATUS_ERROR, or 0.
+		wantHTTP  int
+		wantBlock bool
 		// wantFBBars is true when FB's own bars from the retry are stored.
 		wantFBBars bool
 	}{
@@ -167,14 +177,26 @@ func TestDownloadSymbolLooksUpLaterTickerOnlyOnNoBars(t *testing.T) {
 			answers:    []ohlcAnswer{{bars: []*pb.OHLC{}}, {bars: []*pb.OHLC{}}},
 			wantLookup: true, wantStatus: servicePb.DownloadHistoricalDataResponse_STATUS_OK},
 		{name: "alpaca 401", provider: "alpaca",
-			answers:    []ohlcAnswer{{err: alpacaStatus(http.StatusUnauthorized)}},
-			wantStatus: servicePb.DownloadHistoricalDataResponse_STATUS_ERROR, wantError: failed},
+			answers:    []ohlcAnswer{{err: alpacaStatus(http.StatusUnauthorized, 1)}},
+			wantStatus: servicePb.DownloadHistoricalDataResponse_STATUS_ERROR, wantHTTP: http.StatusUnauthorized,
+			wantError: alpacaDownloadCopy("alpaca didn't accept foreverbull's API key (HTTP 401)",
+				"Check your alpaca API key and secret, or try another provider, then run the download again.")},
+		{name: "alpaca 422", provider: "alpaca",
+			answers:    []ohlcAnswer{{err: alpacaStatus(http.StatusUnprocessableEntity, 1)}},
+			wantStatus: servicePb.DownloadHistoricalDataResponse_STATUS_ERROR, wantHTTP: http.StatusUnprocessableEntity,
+			wantError: alpacaDownloadCopy("alpaca rejected the request as invalid (HTTP 422)",
+				"Check the symbol and the dates, or try another provider, then run the download again. "+
+					"If it keeps happening, please report it at https://github.com/lhjnilsson/foreverbull/issues with this message.")},
 		{name: "alpaca 429 after its retries", provider: "alpaca",
-			answers:    []ohlcAnswer{{err: alpacaStatus(http.StatusTooManyRequests)}},
-			wantStatus: servicePb.DownloadHistoricalDataResponse_STATUS_ERROR, wantError: failed},
+			answers:    []ohlcAnswer{{err: alpacaStatus(http.StatusTooManyRequests, 4)}},
+			wantStatus: servicePb.DownloadHistoricalDataResponse_STATUS_ERROR, wantHTTP: http.StatusTooManyRequests,
+			wantError: alpacaDownloadCopy("alpaca limited how many requests foreverbull can make",
+				"Wait a few minutes, then run the download again, or try another provider.")},
 		{name: "alpaca 500", provider: "alpaca",
-			answers:    []ohlcAnswer{{err: alpacaStatus(http.StatusInternalServerError)}},
-			wantStatus: servicePb.DownloadHistoricalDataResponse_STATUS_ERROR, wantError: failed},
+			answers:    []ohlcAnswer{{err: alpacaStatus(http.StatusInternalServerError, 4)}},
+			wantStatus: servicePb.DownloadHistoricalDataResponse_STATUS_ERROR, wantHTTP: http.StatusInternalServerError,
+			wantError: alpacaDownloadCopy("alpaca had a server error (HTTP 500)",
+				"Run the download again in a few minutes, or try another provider.")},
 	}
 
 	for _, tc := range cases {
@@ -229,6 +251,13 @@ func TestDownloadSymbolLooksUpLaterTickerOnlyOnNoBars(t *testing.T) {
 				require.Equal(t, "FB", stream.sent[0].GetSymbol())
 				require.Equal(t, tc.wantStatus, stream.sent[0].GetStatus())
 				require.Equal(t, tc.wantError, stream.sent[0].GetError())
+				// An HTTP error status crosses the RPC typed; everything else has none.
+				if tc.wantHTTP == 0 {
+					require.Nil(t, stream.sent[0].GetProviderStatus())
+				} else {
+					require.Equal(t, tc.provider, stream.sent[0].GetProviderStatus().GetProvider())
+					require.Equal(t, int32(tc.wantHTTP), stream.sent[0].GetProviderStatus().GetHttpStatus())
+				}
 			}
 
 			var metaBars, metaAssets, metaAliases int
@@ -285,4 +314,52 @@ func storeRenamedFB(t *testing.T, pool *pgxpool.Pool) {
 		INSERT INTO asset_symbol (isin, symbol, from_date, to_date)
 		VALUES ($1, 'FB', '2019-01-01'::date, NULL)`, renamedISIN)
 	require.NoError(t, err)
+}
+
+// emptyRangeBars is a bars provider whose range is empty at this clock,
+// as Alpaca's is when its 15-minute cap leaves nothing after start.
+type emptyRangeBars struct {
+	*supplier.MockMarketdata
+	asked int
+}
+
+func (b *emptyRangeBars) NothingToFetch(time.Time, *time.Time) bool {
+	b.asked++
+	return true
+}
+
+// A range with nothing to fetch asks the provider for no bars and opens no
+// later-ticker lookup: the empty answer would say nothing about the ticker.
+// FB is answered OK with nothing stored.
+func TestDownloadSymbolWithNothingToFetchSkipsTheFetchAndTheLookup(t *testing.T) {
+	test_helper.SetupEnvironment(t, &test_helper.Containers{Postgres: true})
+	pool, err := pgxpool.New(context.Background(), environment.GetPostgresURL())
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+	require.NoError(t, repository.Recreate(context.Background(), pool))
+	storeRenamedFB(t, pool)
+
+	meta := supplier.NewMockMarketdata(t)
+	meta.On("GetAsset", mock.Anything, "FB").Return(&pb.Asset{Symbol: "FB", Name: "Facebook"}, nil)
+	bars := &emptyRangeBars{MockMarketdata: supplier.NewMockMarketdata(t)}
+
+	stream := &countingStream{}
+	fs := NewMarketdataServer(pool, meta)
+	start := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
+	blocked := fs.downloadSymbol(context.Background(), newDownloadSender(stream, func() {}), "FB", start, nil, "alpaca",
+		repository.Asset{Conn: pool}, repository.OHLC{Conn: pool}, bars)
+
+	require.Nil(t, blocked)
+	require.Equal(t, 1, bars.asked)
+	bars.AssertNotCalled(t, "GetOHLC", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	meta.AssertNotCalled(t, "SearchAsset", mock.Anything, mock.Anything)
+	require.Len(t, stream.sent, 1)
+	require.Equal(t, "FB", stream.sent[0].GetSymbol())
+	require.Equal(t, servicePb.DownloadHistoricalDataResponse_STATUS_OK, stream.sent[0].GetStatus())
+	var stored, aliases int
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT count(*) FROM ohlc`).Scan(&stored))
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM asset_symbol WHERE symbol = 'META'`).Scan(&aliases))
+	require.Zero(t, stored)
+	require.Zero(t, aliases)
 }
