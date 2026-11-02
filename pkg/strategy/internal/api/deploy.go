@@ -150,13 +150,24 @@ func (s *StrategyServer) StopDeployment(ctx context.Context, req *servicePb.Stop
 	}
 
 	if deployment.Status == pb.Deployment_RUNNING {
-		if err := deployments.Stop(ctx, deployment.Id); err != nil {
+		// Remove waits for the loop to end before the row reads STOPPED, so
+		// nothing the loop writes lands after STOPPED. Both run detached from
+		// the request and bounded, so a client that leaves can't cut them off.
+		if s.runner != nil {
+			removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), repository.StatusWriteTimeout)
+			err := s.runner.Remove(removeCtx, deployment.Id)
+			cancel()
+			if err != nil {
+				log.Error().Err(err).Str("deployment", deployment.Id).Msg("error stopping deployment runner")
+				return nil, status.Error(codes.Internal, usercopy.DeploymentStopFailed(deployment.GetStrategyName()))
+			}
+		}
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), repository.StatusWriteTimeout)
+		defer cancel()
+		if err := deployments.Stop(stopCtx, deployment.Id); err != nil {
 			return nil, status.Errorf(codes.Internal, "stop deployment: %v", err)
 		}
-		if s.runner != nil {
-			_ = s.runner.Remove(ctx, deployment.Id)
-		}
-		deployment, err = deployments.Get(ctx, deployment.Id)
+		deployment, err = deployments.Get(stopCtx, deployment.Id)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "reload deployment: %v", err)
 		}
