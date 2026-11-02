@@ -35,9 +35,21 @@ var (
 // end: weekdays without New Year's Day, MLK Day, Presidents Day and Good
 // Friday. The zipline tests check the real calendar leaves Good Friday out.
 func xnysSessions(end time.Time) []time.Time {
-	holidays := map[string]bool{"2024-01-01": true, "2024-01-15": true, "2024-02-19": true, "2024-03-29": true}
-	sessions := make([]time.Time, 0, 70)
-	for day := quarterStart; !day.After(end); day = day.AddDate(0, 0, 1) {
+	return sessionsBetween(quarterStart, end)
+}
+
+// sessionsBetween is the weekday calendar the download engine answers for
+// any window, including the 10 sessions before a period. The 2024 holidays
+// the quarter tests name, and Christmas 2023, are not sessions.
+func sessionsBetween(start, end time.Time) []time.Time {
+	holidays := map[string]bool{
+		"2023-12-25": true,
+		"2024-01-01": true, "2024-01-15": true, "2024-02-19": true, "2024-03-29": true,
+	}
+	start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+	end = time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, time.UTC)
+	sessions := make([]time.Time, 0, 80)
+	for day := start; !day.After(end); day = day.AddDate(0, 0, 1) {
 		if day.Weekday() == time.Saturday || day.Weekday() == time.Sunday || holidays[day.Format(time.DateOnly)] {
 			continue
 		}
@@ -185,7 +197,10 @@ func (test *BacktestCommandTest) download(end time.Time, answers ...*financeServ
 	test.mdclient.On("DownloadHistoricalData", mock.Anything, mock.Anything).Return(clientStream, nil)
 
 	ziplineEngine := new(engine.MockEngine)
-	ziplineEngine.On("Sessions", mock.Anything, quarterStart, end).Return(xnysSessions(end), nil)
+	ziplineEngine.On("Sessions", mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, start, end time.Time) ([]time.Time, error) {
+			return sessionsBetween(start, end), nil
+		})
 	msg := test.downloadMessage(quarterBacktest)
 	useEngine(msg, ziplineEngine)
 	return ziplineEngine, command.DownloadFinancialData(context.TODO(), msg)
@@ -276,13 +291,12 @@ func (test *BacktestCommandTest) TestMissingSessionCountsAZeroPricedRow() {
 	test.requireNothingSaved()
 }
 
-// noListingDates is the reason a gap at the start or end of the period
-// fails: foreverbull stores no listing or delisting dates yet.
+// unconfirmedBefore and unconfirmedAfter are the reason a gap at the start
+// or end of the period fails when the provider did not confirm it.
 const (
-	noListingDatesBefore = "foreverbull doesn't store listing or delisting dates yet, so it can't tell a late " +
-		"listing from missing data."
-	noListingDatesAfter = "foreverbull doesn't store listing or delisting dates yet, so it can't tell a " +
-		"delisting from missing data."
+	unconfirmedBefore = "yahoo didn't confirm it was listed then, so foreverbull treats it as missing data."
+	unconfirmedAfter  = "yahoo didn't confirm it was delisted then, so foreverbull treats it as missing data."
+	unconfirmedBoth   = "yahoo didn't confirm a listing or delisting, so foreverbull treats it as missing data."
 )
 
 // A symbol whose first bar is after the period start fails create, with
@@ -294,7 +308,7 @@ func (test *BacktestCommandTest) TestMissingSessionsBeforeTheFirstBarFail() {
 
 	ziplineEngine, err := test.downloadQuarter()
 	test.Require().EqualError(err, "Couldn't load data for backtest 'oef-2024q1': NEWCO has no prices before "+
-		"2024-02-15. "+noListingDatesBefore+" The backtest wasn't saved. Choose a start on or after 2024-02-15, "+
+		"2024-02-15, and "+unconfirmedBefore+" The backtest wasn't saved. Choose a start on or after 2024-02-15, "+
 		"or remove NEWCO, then run `fbull backtest create` again.")
 	ziplineEngine.AssertExpectations(test.T())
 	test.requireNothingSaved()
@@ -309,7 +323,7 @@ func (test *BacktestCommandTest) TestMissingSessionsAfterTheLastBarFail() {
 
 	_, err := test.downloadQuarter()
 	test.Require().EqualError(err, "Couldn't load data for backtest 'oef-2024q1': XYZ has no prices after "+
-		"2024-03-01. "+noListingDatesAfter+" The backtest wasn't saved. Choose an end on or before 2024-03-01, "+
+		"2024-03-01, and "+unconfirmedAfter+" The backtest wasn't saved. Choose an end on or before 2024-03-01, "+
 		"or remove XYZ, then run `fbull backtest create` again.")
 	test.requireNothingSaved()
 }
@@ -323,7 +337,7 @@ func (test *BacktestCommandTest) TestMissingLastSessionFails() {
 
 	_, err := test.downloadQuarter()
 	test.Require().EqualError(err, "Couldn't load data for backtest 'oef-2024q1': XYZ has no prices after "+
-		"2024-03-27. "+noListingDatesAfter+" The backtest wasn't saved. Choose an end on or before 2024-03-27, "+
+		"2024-03-27, and "+unconfirmedAfter+" The backtest wasn't saved. Choose an end on or before 2024-03-27, "+
 		"or remove XYZ, then run `fbull backtest create` again.")
 	test.requireNothingSaved()
 }
@@ -337,7 +351,7 @@ func (test *BacktestCommandTest) TestMissingLastSessionOfTheBenchmarkFails() {
 	test.Require().NoError(err)
 
 	_, err = test.downloadQuarter()
-	test.Require().ErrorContains(err, "OEF has no prices after 2024-03-27. ")
+	test.Require().ErrorContains(err, "OEF has no prices after 2024-03-27, and ")
 	test.requireNothingSaved()
 }
 
@@ -356,8 +370,7 @@ func (test *BacktestCommandTest) TestMissingSessionsCollectEveryCause() {
 		"  AAA: 2024-02-14\n"+
 		"  NEWCO: no prices before 2024-02-15.\n"+
 		"  OLDCO: no prices after 2024-03-01.\n"+
-		"foreverbull doesn't store listing or delisting dates yet, so it can't tell a late listing or a delisting "+
-		"from missing data. Try another provider with --provider, or change the backtest dates, then run "+
+		unconfirmedBoth+" Try another provider with --provider, or change the backtest dates, then run "+
 		"`fbull backtest create` again.")
 	test.requireNothingSaved()
 }
@@ -374,8 +387,7 @@ func (test *BacktestCommandTest) TestMissingSessionsAtBothEdgesNameTheDates() {
 		"days for 2 symbols. The backtest wasn't saved.\n"+
 		"  NEWCO: no prices before 2024-02-15 or after 2024-03-20.\n"+
 		"  OLDCO: no prices after 2024-03-01.\n"+
-		"foreverbull doesn't store listing or delisting dates yet, so it can't tell a late listing or a delisting "+
-		"from missing data. Choose a start on or after 2024-02-15 and an end on or before 2024-03-01, or remove "+
+		unconfirmedBoth+" Choose a start on or after 2024-02-15 and an end on or before 2024-03-01, or remove "+
 		"NEWCO and OLDCO, then run `fbull backtest create` again.")
 	test.requireNothingSaved()
 }
@@ -561,8 +573,7 @@ func (test *BacktestCommandTest) TestMissingSessionsAtBothEndsOfOneSymbol() {
 
 	_, err := test.downloadQuarter()
 	test.Require().EqualError(err, "Couldn't load data for backtest 'oef-2024q1': NEWCO has no prices before "+
-		"2024-02-15 or after 2024-03-20. foreverbull doesn't store listing or delisting dates yet, so it can't tell "+
-		"a late listing or a delisting from missing data. The backtest wasn't saved. Choose a start on or after "+
+		"2024-02-15 or after 2024-03-20, and "+unconfirmedBoth+" The backtest wasn't saved. Choose a start on or after "+
 		"2024-02-15 and an end on or before 2024-03-20, or remove NEWCO, then run `fbull backtest create` again.")
 	test.requireNothingSaved()
 }
@@ -579,8 +590,7 @@ func (test *BacktestCommandTest) TestMissingSessionsWithNoCommonPeriodOfferRemov
 		"days for 2 symbols. The backtest wasn't saved.\n"+
 		"  AAA: no prices before 2024-03-01.\n"+
 		"  BBB: no prices after 2024-02-01.\n"+
-		"foreverbull doesn't store listing or delisting dates yet, so it can't tell a late listing or a delisting "+
-		"from missing data. Remove AAA and BBB, then run `fbull backtest create` again.")
+		unconfirmedBoth+" Remove AAA and BBB, then run `fbull backtest create` again.")
 	test.requireNothingSaved()
 }
 

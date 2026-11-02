@@ -45,6 +45,7 @@ var etfMembership = []repository.MemberInterval{{ISIN: "US0378331005", FromDate:
 type fakeBacktests struct {
 	backtest *pb.Backtest
 	err      error
+	events   []repository.SymbolEvent
 }
 
 func (f fakeBacktests) Get(_ context.Context, _ string) (*pb.Backtest, error) {
@@ -52,6 +53,10 @@ func (f fakeBacktests) Get(_ context.Context, _ string) (*pb.Backtest, error) {
 		return nil, f.err
 	}
 	return f.backtest, nil
+}
+
+func (f fakeBacktests) SymbolEvents(context.Context, string) ([]repository.SymbolEvent, error) {
+	return f.events, nil
 }
 
 func date(year, month, day int32) *commonPB.Date {

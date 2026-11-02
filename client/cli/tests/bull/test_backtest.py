@@ -1518,9 +1518,9 @@ def _invoke_run(
         return result, get_execution
 
 
-_LEFT_OUT = "3 symbols had no prices after 2026-03-31 and were left out: ABC, DEF, GHI."
-_LEFT_OUT_XYZ = "1 symbol had no prices after 2026-04-15 and was left out: XYZ."
-_LEFT_OUT_THIRD = "2 symbols had no prices after 2026-05-29 and were left out: JKL, MNO."
+_LEFT_OUT = "3 symbols were delisted after their last price on 2026-03-31 and were left out: ABC, DEF, GHI."
+_LEFT_OUT_XYZ = "1 symbol was delisted after its last price on 2026-04-15 and was left out: XYZ."
+_LEFT_OUT_THIRD = "2 symbols were delisted after their last price on 2026-05-29 and were left out: JKL, MNO."
 
 
 def _run_with_notices(runner, notices, args=None, app=None):
@@ -1555,7 +1555,7 @@ def test_backtest_run_summary_folds_three_dates_into_one_line(runner, monkeypatc
     result, _ = _run_with_notices(runner, [_LEFT_OUT, _LEFT_OUT_XYZ, _LEFT_OUT_THIRD])
     assert result.exit_code == 0
     assert _warnings(result) == [
-        "⚠ 6 symbols had no prices before the run ended and were left out. Run with --verbose for the list."
+        "⚠ 6 symbols were delisted before the run ended and were left out. Run with --verbose for the list."
     ]
     assert "ABC" not in result.stdout
 
@@ -1563,7 +1563,7 @@ def test_backtest_run_summary_folds_three_dates_into_one_line(runner, monkeypatc
 def test_backtest_run_summary_verbose_lists_every_date(runner, monkeypatch):
     # The global flag, as `fbull --verbose backtest create` reads it.
     monkeypatch.setenv("LOGGING_LEVEL", "ERROR")
-    many = "7 symbols had no prices after 2026-06-30 and were left out: A, B, C, D, E, F, G."
+    many = "7 symbols were delisted after their last price on 2026-06-30 and were left out: A, B, C, D, E, F, G."
     result, _ = _run_with_notices(
         runner,
         [_LEFT_OUT, _LEFT_OUT_XYZ, _LEFT_OUT_THIRD, many],
@@ -1572,7 +1572,7 @@ def test_backtest_run_summary_verbose_lists_every_date(runner, monkeypatch):
     )
     assert result.exit_code == 0
     assert _warnings(result) == [
-        "⚠ 13 symbols had no prices before the run ended and were left out.",
+        "⚠ 13 symbols were delisted before the run ended and were left out.",
         f"⚠ {_LEFT_OUT}",
         f"⚠ {_LEFT_OUT_XYZ}",
         f"⚠ {_LEFT_OUT_THIRD}",
@@ -1582,12 +1582,12 @@ def test_backtest_run_summary_verbose_lists_every_date(runner, monkeypatch):
 
 def test_backtest_run_summary_names_at_most_five_symbols_per_line(runner, monkeypatch):
     monkeypatch.delenv("LOGGING_LEVEL", raising=False)
-    nine = "9 symbols had no prices after 2026-03-31 and were left out: ABC, DEF, GHI, JKL, MNO, PQR, STU, VWX, YZA."
-    five = "5 symbols had no prices after 2026-04-30 and were left out: A, B, C, D, E."
+    nine = "9 symbols were delisted after their last price on 2026-03-31 and were left out: ABC, DEF, GHI, JKL, MNO, PQR, STU, VWX, YZA."
+    five = "5 symbols were delisted after their last price on 2026-04-30 and were left out: A, B, C, D, E."
     result, _ = _run_with_notices(runner, [nine, five])
     assert result.exit_code == 0
     assert _warnings(result) == [
-        "⚠ 9 symbols had no prices after 2026-03-31 and were left out: ABC, DEF, GHI, JKL, MNO and 4 more.",
+        "⚠ 9 symbols were delisted after their last price on 2026-03-31 and were left out: ABC, DEF, GHI, JKL, MNO and 4 more.",
         f"⚠ {five}",
     ]
 
@@ -1595,7 +1595,7 @@ def test_backtest_run_summary_names_at_most_five_symbols_per_line(runner, monkey
 def test_backtest_run_summary_says_held_positions_were_closed_only_on_their_line(runner, monkeypatch):
     monkeypatch.delenv("LOGGING_LEVEL", raising=False)
     held = (
-        "1 symbol had no prices after 2023-01-13 and was left out: XYZ. "
+        "1 symbol was delisted after its last price on 2023-01-13 and was left out: XYZ. "
         "Positions held were closed at the last price on 2023-01-13."
     )
     result, _ = _run_with_notices(runner, [held, _LEFT_OUT_XYZ])
@@ -1606,13 +1606,13 @@ def test_backtest_run_summary_says_held_positions_were_closed_only_on_their_line
 def test_backtest_run_summary_held_line_keeps_its_sentence_after_five_symbols(runner, monkeypatch):
     monkeypatch.delenv("LOGGING_LEVEL", raising=False)
     held = (
-        "7 symbols had no prices after 2023-01-13 and were left out: A, B, C, D, E, F, G. "
+        "7 symbols were delisted after their last price on 2023-01-13 and were left out: A, B, C, D, E, F, G. "
         "Positions held were closed at the last price on 2023-01-13."
     )
     result, _ = _run_with_notices(runner, [held])
     assert _warnings(result) == [
         (
-            "⚠ 7 symbols had no prices after 2023-01-13 and were left out: A, B, C, D, E and 2 more. "
+            "⚠ 7 symbols were delisted after their last price on 2023-01-13 and were left out: A, B, C, D, E and 2 more. "
             "Positions held were closed at the last price on 2023-01-13."
         )
     ]
@@ -1621,13 +1621,13 @@ def test_backtest_run_summary_held_line_keeps_its_sentence_after_five_symbols(ru
 def test_backtest_run_summary_folded_line_says_held_positions_were_closed(runner, monkeypatch):
     monkeypatch.delenv("LOGGING_LEVEL", raising=False)
     held = (
-        "2 symbols had no prices after 2026-05-29 and were left out: JKL, MNO. "
+        "2 symbols were delisted after their last price on 2026-05-29 and were left out: JKL, MNO. "
         "Positions held were closed at the last price on 2026-05-29."
     )
     result, _ = _run_with_notices(runner, [_LEFT_OUT, _LEFT_OUT_XYZ, held])
     assert _warnings(result) == [
         (
-            "⚠ 6 symbols had no prices before the run ended and were left out. "
+            "⚠ 6 symbols were delisted before the run ended and were left out. "
             "Positions held were closed at their last price. Run with --verbose for the list."
         )
     ]
@@ -1645,6 +1645,15 @@ def test_backtest_run_summary_prefixes_each_notice_with_the_create_warning_sign(
     result, _ = _run_with_notices(runner, [_LEFT_OUT, _LEFT_OUT_XYZ])
     shown = [line for line in result.stdout.splitlines() if "⚠" in line]
     assert shown == [f"  ⚠ {_LEFT_OUT}", f"  ⚠ {_LEFT_OUT_XYZ}"]
+
+
+def test_backtest_run_summary_shows_a_listing_next_to_an_auto_close(runner, monkeypatch):
+    monkeypatch.delenv("LOGGING_LEVEL", raising=False)
+    auto_close = "1 symbol was delisted after its last price on 2024-03-01 and was left out: OLD."
+    listing = "XYZ was listed on 2024-03-15 and has no prices before then."
+    result, _ = _run_with_notices(runner, [auto_close, listing])
+    assert result.exit_code == 0
+    assert _warnings(result) == [f"⚠ {auto_close}", f"⚠ {listing}"]
 
 
 def test_backtest_run_summary_without_notices_prints_no_warning(runner):

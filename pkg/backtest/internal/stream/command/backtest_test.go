@@ -20,6 +20,7 @@ import (
 	"github.com/lhjnilsson/foreverbull/pkg/backtest/internal/stream/command"
 	"github.com/lhjnilsson/foreverbull/pkg/backtest/internal/stream/dependency"
 	bs "github.com/lhjnilsson/foreverbull/pkg/backtest/stream"
+	financepkg "github.com/lhjnilsson/foreverbull/pkg/finance"
 	"github.com/lhjnilsson/foreverbull/pkg/finance/supplier"
 	"github.com/lhjnilsson/foreverbull/pkg/pb"
 	"github.com/lhjnilsson/foreverbull/pkg/pb/backtest"
@@ -49,6 +50,8 @@ type BacktestCommandTest struct {
 	backtest *backtest.Backtest
 	// restore puts back the session clock fixClock replaced.
 	restore func()
+	// restoreInspect puts back the provider lookup SetupTest replaced.
+	restoreInspect func()
 }
 
 func TestBacktest(t *testing.T) {
@@ -99,6 +102,11 @@ func (test *BacktestCommandTest) SetupTest() {
 	test.mdclient = new(financeServicePB.MockMarketdataClient)
 	test.resetBars()
 	test.fixClock(testClock)
+	test.restoreInspect = command.SetSymbolInspector(func(
+		context.Context, *pgxpool.Pool, string, string, string, *time.Time, *time.Time,
+	) (financepkg.SymbolFacts, error) {
+		return financepkg.SymbolFacts{}, nil
+	})
 }
 
 func (test *BacktestCommandTest) date(s string) time.Time {
@@ -127,6 +135,10 @@ func (test *BacktestCommandTest) mockGetAsset(symbol string, err error) {
 
 func (test *BacktestCommandTest) TearDownTest() {
 	test.restoreClock()
+	if test.restoreInspect != nil {
+		test.restoreInspect()
+		test.restoreInspect = nil
+	}
 }
 
 func (test *BacktestCommandTest) TestCreateBacktestFromBacktest() {

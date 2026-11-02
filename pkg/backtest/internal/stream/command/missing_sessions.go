@@ -84,11 +84,11 @@ func providerMissingDays(text string) ([]time.Time, bool) {
 //
 // With coverage set, every session of the period counts. Sessions before
 // the symbol's first stored bar or after its last, over all stored time,
-// are a gap at the edge of the period: foreverbull stores no listing or
-// delisting date yet, so a late first bar
-// or an early last bar is never read as one. A symbol with no stored bar at
-// all has no prices for the period. Without coverage (Zipline's refusal,
-// which names its own days) only the reported days count.
+// are a gap at the edge of the period. A late first bar or an early last
+// bar is a listing or a delisting only when the provider confirms it.
+// A symbol with no stored bar at all has no prices for the period. Without
+// coverage (Zipline's refusal, which names its own days) only the reported
+// days count.
 //
 // A day that is not a session (a holiday) is missing only when the
 // provider reported it: it failed that symbol's download, so it is never
@@ -251,18 +251,29 @@ func missingSessionsLead(name, provider string, symbols int, trading bool, saved
 		name, provider, symbols, noun, saved)
 }
 
-// noListingDates says why a gap at an edge of the period fails: no listing
-// or delisting date is stored yet, so the
-// gap could be a listing, a delisting, or missing data.
-func noListingDates(before, after bool) string {
-	told := "a late listing or a delisting"
+// unconfirmedClause is the end of one symbol's sentence when the provider
+// did not confirm the edge. The provider is the one the backtest asked.
+func unconfirmedClause(provider string, before, after bool) string {
 	switch {
-	case !after:
-		told = "a late listing"
-	case !before:
-		told = "a delisting"
+	case before && after:
+		return provider + " didn't confirm a listing or delisting, so foreverbull treats it as missing data."
+	case before:
+		return provider + " didn't confirm it was listed then, so foreverbull treats it as missing data."
+	default:
+		return provider + " didn't confirm it was delisted then, so foreverbull treats it as missing data."
 	}
-	return "foreverbull doesn't store listing or delisting dates yet, so it can't tell " + told + " from missing data."
+}
+
+// unconfirmedReason is the shared sentence under a block of symbols.
+func unconfirmedReason(provider string, before, after bool) string {
+	switch {
+	case before && after:
+		return provider + " didn't confirm a listing or delisting, so foreverbull treats it as missing data."
+	case before:
+		return provider + " didn't confirm a listing, so foreverbull treats it as missing data."
+	default:
+		return provider + " didn't confirm a delisting, so foreverbull treats it as missing data."
+	}
 }
 
 // edgeStep is the next step for gaps at the edges of the period only: a
@@ -340,56 +351,63 @@ func coverageLine(days []time.Time, gap symbolGaps) string {
 	}
 }
 
+// coverageStep is the next step for gaps that are not lookup failures.
+func coverageStep(days []time.Time, gaps []symbolGaps) string {
+	inside, noBars := false, false
+	edges := make([]symbolGaps, 0, len(gaps))
+	for _, gap := range gaps {
+		inside = inside || len(gap.sessions) > 0
+		noBars = noBars || gap.noBars
+		if gap.atEdge() {
+			edges = append(edges, gap)
+		}
+	}
+	switch {
+	case inside:
+		return missingSessionsNextStep
+	case noBars:
+		return noPriceDataNextStep
+	default:
+		return edgeStep(edges, periodSession(days, true), periodSession(days, false))
+	}
+}
+
 // coverageMessage is the message when part of the period has no prices at
 // all for some symbol: before its first bar, after its last, or no bar.
 // One symbol with that one cause fits one sentence:
 //
-//	Couldn't load data for backtest 'b': NEWCO has no prices before 2024-02-15. foreverbull doesn't store
-//	listing or delisting dates yet, so it can't tell a late listing from missing data. The backtest wasn't
-//	saved. Choose a start on or after 2024-02-15, or remove NEWCO, then run `fbull backtest create` again.
+//	Couldn't load data for backtest 'b': NEWCO has no prices before 2024-02-15, and yahoo didn't confirm it was
+//	listed then, so foreverbull treats it as missing data. The backtest wasn't saved. Choose a start on or after
+//	2024-02-15, or remove NEWCO, then run `fbull backtest create` again.
 //
 // Anything more lists every symbol's causes, one line each, under the lead,
 // with the reason and the step last. A missing day inside a span makes the
 // step the provider or dates one, and a symbol with no bars the symbol,
 // dates or provider one.
 func coverageMessage(name, provider string, days []time.Time, gaps []symbolGaps, removed bool) string {
-	before, after, inside, noBars, trading := false, false, false, false, true
-	edges := make([]symbolGaps, 0, len(gaps))
+	before, after, trading := false, false, true
 	for _, gap := range gaps {
 		before = before || !gap.noneBefore.IsZero()
 		after = after || !gap.noneAfter.IsZero()
-		inside = inside || len(gap.sessions) > 0
-		noBars = noBars || gap.noBars
 		trading = trading && !gap.closed
-		if gap.atEdge() {
-			edges = append(edges, gap)
-		}
 	}
-	var next string
-	switch {
-	case inside:
-		next = missingSessionsNextStep
-	case noBars:
-		next = noPriceDataNextStep
-	default:
-		next = edgeStep(edges, periodSession(days, true), periodSession(days, false))
-	}
-	saved, next := savedAndNext(name, next, removed)
-	reason := ""
-	if before || after {
-		reason = noListingDates(before, after) + " "
-	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	saved, next := savedAndNext(name, coverageStep(days, gaps), removed)
 	if gap := gaps[0]; len(gaps) == 1 && len(gap.sessions) == 0 {
 		if gap.noBars {
 			return fmt.Sprintf("Couldn't load data for backtest '%s': %s has no prices for %s between %s and %s. %s %s",
 				name, provider, gap.symbol, gap.from.Format(time.DateOnly), gap.to.Format(time.DateOnly), saved, next)
 		}
-		return fmt.Sprintf("Couldn't load data for backtest '%s': %s has %s. %s%s %s",
-			name, gap.symbol, edgeCause(gap), reason, saved, next)
+		return fmt.Sprintf("Couldn't load data for backtest '%s': %s has %s, and %s %s %s",
+			name, gap.symbol, edgeCause(gap), unconfirmedClause(provider, before, after), saved, next)
 	}
 	lines := []string{missingSessionsLead(name, provider, len(gaps), trading, saved)}
 	for _, gap := range gaps {
 		lines = append(lines, coverageLine(days, gap))
+	}
+	reason := ""
+	if before || after {
+		reason = unconfirmedReason(provider, before, after) + " "
 	}
 	return strings.Join(append(lines, reason+next), "\n")
 }
@@ -497,6 +515,19 @@ type closedPeriod struct {
 	sessions   []time.Time
 }
 
+// ziplineFrom is the engine the check and the ingest share.
+func ziplineFrom(ctx context.Context, msg stream.Message) (engine.Engine, error) {
+	eng, err := msg.Call(ctx, dependency.GetEngineKey)
+	if err != nil {
+		return nil, fmt.Errorf("error getting zipline engine: %v", err)
+	}
+	ziplineEngine, isEngine := eng.(engine.Engine)
+	if !isEngine {
+		return nil, errors.New("error casting zipline engine")
+	}
+	return ziplineEngine, nil
+}
+
 // readClosedPeriod reads the period's sessions up to the last completed one
 // before any provider is asked. A period with none fails create here, once,
 // so no provider's no-prices sentence follows on the same run: either
@@ -510,13 +541,9 @@ func readClosedPeriod(ctx context.Context, msg stream.Message, backtests reposit
 		period.end = last
 	}
 	// Ingest's failure copy, since both calls reach the same Zipline pod.
-	eng, err := msg.Call(ctx, dependency.GetEngineKey)
+	ziplineEngine, err := ziplineFrom(ctx, msg)
 	if err != nil {
-		return period, discardFailedIngest(ctx, backtests, name, id, fmt.Errorf("error getting zipline engine: %v", err))
-	}
-	ziplineEngine, isEngine := eng.(engine.Engine)
-	if !isEngine {
-		return period, errors.New("error casting zipline engine")
+		return period, discardFailedIngest(ctx, backtests, name, id, err)
 	}
 	if !period.end.Before(start) {
 		period.sessions, err = ziplineEngine.Sessions(ctx, start, period.end)
@@ -605,14 +632,17 @@ func noSessionMessage(name string, start, end time.Time, removed bool) string {
 
 // checkMissingSessions fails create when a symbol has no bar on a session
 // of the backtest period, up to the last completed session, so a backtest
-// never runs on a price nobody sent (see universe.md §7.5). That includes
-// the first and last sessions, since no listing or delisting date is stored
-// yet, and a symbol with no stored bar at all. It runs after the download,
-// before Ingest writes the bundle, collects every cause, and deletes the
-// backtest that the CREATING step stored. readClosedPeriod read the period
-// before the download and failed it when it had no session.
-func checkMissingSessions(ctx context.Context, db *pgxpool.Pool, backtests repository.Backtest,
-	name, id, provider string, symbols []string, reported map[string][]time.Time, period closedPeriod,
+// never runs on a price nobody sent (see universe.md §7.5). An edge gap is
+// kept when the provider confirms a listing or a delisting; that evidence
+// is stored on the backtest. Anything short of that evidence stays the
+// missing-session sentence. A failed lookup is its own sentence and is
+// never read as listed or delisted. A symbol with no stored bar at all
+// still fails. It runs after the download, before Ingest writes the bundle,
+// collects every cause, and deletes the backtest that the CREATING step
+// stored. readClosedPeriod read the period before the download and failed
+// it when it had no session.
+func checkMissingSessions(ctx context.Context, msg stream.Message, db *pgxpool.Pool, backtests repository.Backtest,
+	name, id, provider, profile string, symbols []string, reported map[string][]time.Time, period closedPeriod,
 ) error {
 	start, end := period.start, period.end
 	order := listedOrder(symbols)
@@ -643,15 +673,43 @@ func checkMissingSessions(ctx context.Context, db *pgxpool.Pool, backtests repos
 		}
 		byUnit[symbol] = append(byUnit[symbol], days...)
 	}
-	days, gaps := missingSessions(period.sessions, names, unitBars(units, bars), byUnit, true)
-	if len(gaps) == 0 {
-		// Every reported day is in gaps, so reported is empty here.
+	joined := unitBars(units, bars)
+	days, gaps := missingSessions(period.sessions, names, joined, byUnit, true)
+	var misses []lookupMiss
+	if len(gaps) > 0 {
+		eng, err := ziplineFrom(ctx, msg)
+		if err != nil {
+			return discardFailedIngest(ctx, backtests, name, id, err)
+		}
+		benchmark := ""
+		if len(names) > 0 {
+			benchmark = names[0]
+		}
+		var events []repository.SymbolEvent
+		gaps, events, misses, err = excuseEdges(ctx, db, eng, provider, profile, benchmark, period.sessions, joined, gaps)
+		if err != nil {
+			return discardFailedIngest(ctx, backtests, name, id, err)
+		}
+		if len(gaps) == 0 && len(misses) == 0 {
+			if err := backtests.SaveSymbolEvents(ctx, name, events); err != nil {
+				return discardFailedIngest(ctx, backtests, name, id, err)
+			}
+			return nil
+		}
+	}
+	if len(gaps) == 0 && len(misses) == 0 {
 		return nil
 	}
 	err = deleteAfterFailure(ctx, backtests, name, id)
 	removed := err == nil || errors.Is(err, pgx.ErrNoRows)
 	if !removed {
 		log.Warn().Err(err).Str("backtest", name).Msg("error deleting backtest after missing sessions")
+	}
+	if len(misses) > 0 && len(gaps) > 0 {
+		return plainSentence(mixedCoverageMessage(name, provider, days, gaps, misses, removed))
+	}
+	if len(misses) > 0 {
+		return plainSentence(lookupFailureMessage(name, provider, misses, removed))
 	}
 	return plainSentence(missingSessionsMessage(name, provider, days, gaps, removed))
 }

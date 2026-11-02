@@ -494,7 +494,7 @@ func (test *BacktestServerTest) TestGetExecution() {
 		backtest := test.createBacktest("test_1")
 		session := test.createSession(backtest.Name)
 		execution := test.createExecution(session.Id)
-		line := "3 symbols had no prices after 2026-03-31 and were left out: ABC, DEF, GHI."
+		line := "3 symbols were delisted after their last price on 2026-03-31 and were left out: ABC, DEF, GHI."
 		executions := repository.Execution{Conn: test.pgx}
 		test.Require().NoError(executions.SetNotices(context.TODO(), execution.Id, []string{line}))
 

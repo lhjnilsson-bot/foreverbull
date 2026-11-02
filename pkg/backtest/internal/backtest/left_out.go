@@ -82,13 +82,13 @@ func barsProvider(stored *pb.Backtest) string {
 	return provider
 }
 
-// withoutEndedPrices wraps a member source so a ticker whose ISIN has no bar
-// on or after the UTC date of t is not passed to Process. A member with no
-// bar at all is left as it is: the ingest refuses such a backtest, so it
-// cannot reach a run. A member whose last bar is the newest bar of any
+// withoutEndedPrices wraps a member source so a confirmed delisting is not
+// passed to Process once its last bar is before t. confirmed is the symbol
+// set create stored. A symbol whose bars merely ended is kept: that is a
+// gap, not a delisting. A member whose last bar is the newest bar of any
 // member is not left out either: its prices did not end, the stored data
-// does, and a run past that date has no newer price for any name.
-func withoutEndedPrices(source symbolSource, aliases []repository.AliasLastBar, left *leftOut) symbolSource {
+// does.
+func withoutEndedPrices(source symbolSource, aliases []repository.AliasLastBar, left *leftOut, confirmed map[string]bool) symbolSource {
 	newest := newestBar(aliases)
 	return func(ctx context.Context, t time.Time) ([]string, error) {
 		symbols, err := source(ctx, t)
@@ -99,7 +99,7 @@ func withoutEndedPrices(source symbolSource, aliases []repository.AliasLastBar, 
 		kept := make([]string, 0, len(symbols))
 		for _, symbol := range symbols {
 			last, ok := lastBarAt(aliases, symbol, day)
-			if ok && last.Before(day) && last.Before(newest) {
+			if ok && confirmed[symbol] && last.Before(day) && last.Before(newest) {
 				if previous, seen := left.lastBar[symbol]; !seen || last.After(previous) {
 					left.lastBar[symbol] = last
 				}
@@ -154,7 +154,7 @@ func dayOf(t time.Time) time.Time {
 }
 
 // notices is one line per last-bar date, oldest first, with the symbols
-// sorted: "3 symbols had no prices after 2026-03-31 and were left out: ABC, DEF, GHI."
+// sorted: "3 symbols were delisted after their last price on 2026-03-31 and were left out: ABC, DEF, GHI."
 // A line with a held symbol ends "Positions held were closed at the last price on 2026-03-31."
 func (l *leftOut) notices() []string {
 	if l == nil || len(l.lastBar) == 0 {
@@ -180,15 +180,15 @@ func (l *leftOut) notices() []string {
 	return lines
 }
 
-// leftOutLine names every symbol whose prices ended on last. When any of
-// them was held, the line says the positions were closed at that day's price.
+// leftOutLine names every symbol delisted on last. When any of them was
+// held, the line says the positions were closed at that day's price.
 func leftOutLine(last time.Time, symbols []string, held bool) string {
 	slices.Sort(symbols)
 	names := strings.Join(symbols, ", ")
 	date := last.Format(time.DateOnly)
-	line := fmt.Sprintf("%d symbols had no prices after %s and were left out: %s.", len(symbols), date, names)
+	line := fmt.Sprintf("%d symbols were delisted after their last price on %s and were left out: %s.", len(symbols), date, names)
 	if len(symbols) == 1 {
-		line = fmt.Sprintf("1 symbol had no prices after %s and was left out: %s.", date, names)
+		line = fmt.Sprintf("1 symbol was delisted after its last price on %s and was left out: %s.", date, names)
 	}
 	if held {
 		line += fmt.Sprintf(" Positions held were closed at the last price on %s.", date)
