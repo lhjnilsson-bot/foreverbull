@@ -386,6 +386,9 @@ func parseExperimentRows(rows pgx.Rows) ([]*pb.Experiment, error) {
 			experimentStats(portfolioValue, maxDrawdown, sharpe, algorithmPeriodReturn, benchmarkPeriodReturn))
 		experiments = append(experiments, &e)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read strategy experiments: %w", err)
+	}
 
 	return experiments, nil
 }

@@ -138,6 +138,9 @@ func parseVersionRows(rows pgx.Rows) ([]*pb.Version, error) {
 		v.CreatedAt = internal_pb.TimeToProtoTimestamp(createdAt)
 		versions = append(versions, &v)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read strategy versions: %w", err)
+	}
 
 	return versions, nil
 }

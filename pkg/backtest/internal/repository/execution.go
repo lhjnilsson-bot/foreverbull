@@ -542,6 +542,9 @@ func (db *Execution) GetPeriods(ctx context.Context, executionId string) ([]*bac
 
 		periods = append(periods, &period)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read execution periods: %w", err)
+	}
 
 	return periods, nil
 }
@@ -708,6 +711,9 @@ func (db *Execution) parseRows(rows pgx.Rows) ([]*backtest.Execution, error) {
 		}
 		execution.Result = &result
 		executions = append(executions, &execution)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read executions: %w", err)
 	}
 
 	return executions, nil

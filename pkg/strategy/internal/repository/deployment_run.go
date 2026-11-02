@@ -158,6 +158,9 @@ func parseDeploymentRunRows(rows pgx.Rows) ([]*pb.DeploymentRun, error) {
 
 		runs = append(runs, &r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read strategy deployment runs: %w", err)
+	}
 
 	return runs, nil
 }

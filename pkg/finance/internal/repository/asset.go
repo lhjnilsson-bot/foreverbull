@@ -40,8 +40,8 @@ func (db *Asset) List(ctx context.Context) ([]*pb.Asset, error) {
 		assets = append(assets, &asset)
 	}
 
-	if rows.Err() != nil {
-		return nil, fmt.Errorf("failed to list assets: %w", err)
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read assets: %w", err)
 	}
 
 	return assets, nil
@@ -70,8 +70,8 @@ func (db *Asset) ListBySymbols(ctx context.Context, symbols []string) ([]*pb.Ass
 		assets = append(assets, &asset)
 	}
 
-	if rows.Err() != nil {
-		return nil, fmt.Errorf("failed to list assets: %w", err)
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read assets: %w", err)
 	}
 
 	if len(assets) != len(symbols) {

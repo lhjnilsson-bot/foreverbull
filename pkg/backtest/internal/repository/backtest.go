@@ -212,6 +212,9 @@ func (db *Backtest) Get(ctx context.Context, name string) (*backtest.Backtest, e
 			Enabled: *row.Enabled,
 		})
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read backtest: %w", err)
+	}
 	if b.Name == "" {
 		return nil, pgx.ErrNoRows
 	}
@@ -334,6 +337,9 @@ func (db *Backtest) List(ctx context.Context) ([]*backtest.Backtest, error) {
 			Enabled: *row.Enabled,
 		})
 
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read backtests: %w", err)
 	}
 	return backtests, nil
 }

@@ -149,6 +149,9 @@ func (db *Instance) Get(ctx context.Context, instanceID string) (*pb.Instance, e
 		status.OccurredAt = internal_pb.TimeToProtoTimestamp(occurredAt)
 		instance.Statuses = append(instance.Statuses, &status)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read instance: %w", err)
+	}
 
 	if instance.ID == "" {
 		return nil, errors.New("instance not found")
@@ -220,6 +223,9 @@ func (db *Instance) parseRows(rows pgx.Rows) ([]*pb.Instance, error) {
 			instance.Statuses = append(instance.Statuses, &status)
 			instances = append(instances, &instance)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read instances: %w", err)
 	}
 
 	return instances, nil

@@ -111,6 +111,9 @@ func (db *Session) parseRows(rows pgx.Rows) ([]*pb.Session, error) {
 		}
 		sessions = append(sessions, &session)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read sessions: %w", err)
+	}
 	return sessions, nil
 }
 

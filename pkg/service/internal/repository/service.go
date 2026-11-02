@@ -241,6 +241,9 @@ func (db *Service) Get(ctx context.Context, image string) (*pb.Service, error) {
 
 		service.Statuses = append(service.Statuses, &status)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read service: %w", err)
+	}
 
 	if service.Image == "" {
 		return nil, errors.New("service not found")
@@ -352,6 +355,9 @@ func (db *Service) List(ctx context.Context) ([]*pb.Service, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode algorithm: %w", err)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read services: %w", err)
 	}
 
 	return services, nil
