@@ -47,7 +47,7 @@ func fakeAlpacaBars(t *testing.T) (*AlpacaBars, *[]url.Values) {
 	t.Cleanup(srv.Close)
 
 	return &AlpacaBars{opts: marketdata.ClientOpts{
-		APIKey: "key", APISecret: "secret", BaseURL: srv.URL, RetryLimit: 1,
+		APIKey: "key", APISecret: "secret", BaseURL: srv.URL,
 	}}, &queries
 }
 
@@ -87,7 +87,7 @@ func TestAlpacaGetOHLCRequestsSplitAdjustedDailyBars(t *testing.T) {
 func TestAlpacaRawBarsShowTheSplitAsAFakeDrop(t *testing.T) {
 	t.Parallel()
 	bars, _ := fakeAlpacaBars(t)
-	raw, err := bars.client(context.Background()).GetBars("AAPL", marketdata.GetBarsRequest{
+	raw, err := bars.clientWith(context.Background(), nil).GetBars("AAPL", marketdata.GetBarsRequest{
 		TimeFrame:  marketdata.OneDay,
 		Adjustment: marketdata.AdjustmentRaw,
 		Start:      time.Date(2020, 8, 27, 0, 0, 0, 0, time.UTC),

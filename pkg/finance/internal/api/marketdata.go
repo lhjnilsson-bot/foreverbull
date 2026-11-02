@@ -356,6 +356,17 @@ func (fs *MarketdataServer) downloadSymbol(
 	}
 
 	storeSymbol := asset.Symbol
+	// A provider that knows it would ask for nothing (Alpaca, when no
+	// completed session is in the range or its 15-minute cap on recent data
+	// empties it) answers with no bars that say nothing about the ticker.
+	// The symbol has nothing to store yet, so it is neither fetched nor
+	// looked up under a later ticker.
+	if nothingToFetch(bars, start, end) {
+		log.Info().Str("symbol", symbol).Str("provider", provider).
+			Msg("historical data download skipped: nothing completed to fetch in the range yet")
+		sender.send(rsp)
+		return nil
+	}
 	ohlcs, err := askedTickerBars(ctx, bars, symbol, provider, storeSymbol, start, end)
 	if err != nil {
 		var blocked *marketdata.BlockedError
@@ -450,6 +461,21 @@ func missingPriceDownloadError(symbol, provider string, err error) error {
 		return nil
 	}
 	return &marketdata.MissingPriceError{Provider: provider, Symbol: symbol, Days: missing.Days}
+}
+
+// emptyRangeSupplier is a provider that can tell, before a request, that a
+// fetch from start to end would ask it for nothing.
+type emptyRangeSupplier interface {
+	NothingToFetch(start time.Time, end *time.Time) bool
+}
+
+var _ emptyRangeSupplier = (*marketdata.AlpacaBars)(nil)
+
+// nothingToFetch reports that bars would ask its provider for nothing from
+// start to end, so an empty answer is not the provider's "no bars".
+func nothingToFetch(bars supplier.Marketdata, start time.Time, end *time.Time) bool {
+	ranged, ok := bars.(emptyRangeSupplier)
+	return ok && ranged.NothingToFetch(start, end)
 }
 
 // askedTickerBars fetches the bars of the asked ticker. Empty bars with a
