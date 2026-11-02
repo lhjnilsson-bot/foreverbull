@@ -293,6 +293,25 @@ func providerTimedOut(ctx context.Context, err error) bool {
 func failDownload(rsp *servicePb.DownloadHistoricalDataResponse, err error) {
 	rsp.Status = servicePb.DownloadHistoricalDataResponse_STATUS_ERROR
 	rsp.Error = err.Error()
+	var barsStatus *financeapi.BarsStatusError
+	if errors.As(err, &barsStatus) {
+		rsp.ProviderStatus = barsStatus.ProviderStatus()
+	}
+}
+
+// barsStatusError is the named STATUS_ERROR when the provider answered a
+// bars request for symbol with an HTTP error status after its bounded
+// retries, or nil. The status and the number of tries are logged; the
+// provider's own text never is, because it can carry the response body.
+func barsStatusError(symbol, provider, step string, err error) error {
+	var status *marketdata.AlpacaBarsError
+	if !errors.As(err, &status) {
+		return nil
+	}
+	log.Error().Str("symbol", symbol).Str("provider", provider).Str("step", step).
+		Int("status", status.HTTPCode).Int("tries", status.Tries).
+		Msg("historical data download failed: the provider answered with an error status")
+	return &financeapi.BarsStatusError{Provider: provider, Symbol: symbol, Status: status.HTTPCode}
 }
 
 // failSymbol reports a symbol as STATUS_ERROR. Create fails on that status.
@@ -405,6 +424,10 @@ func (fs *MarketdataServer) downloadSymbol(
 			if ctx.Err() != nil {
 				return nil
 			}
+			if named := barsStatusError(symbol, provider, "find later ticker", fetchErr); named != nil {
+				failSymbol(ctx, sender, rsp, named)
+				return nil
+			}
 			failSymbol(ctx, sender, rsp, internalDownloadError(symbol, "find later ticker", fetchErr))
 			return nil
 		}
@@ -427,6 +450,7 @@ func (fs *MarketdataServer) downloadSymbol(
 		}
 		var invalid *repository.InvalidPriceError
 		var stored *repository.StoreError
+		var status *marketdata.AlpacaBarsError
 		switch {
 		case providerTimedOut(ctx, err):
 			// A refetch under the symbol lock ran out of time. It ends before
@@ -438,6 +462,8 @@ func (fs *MarketdataServer) downloadSymbol(
 			err = noPriceDataError(symbol)
 		case errors.As(err, &stored):
 			err = internalDownloadError(symbol, "store bars", stored.Err)
+		case errors.As(err, &status):
+			err = barsStatusError(symbol, provider, "refetch bars", err)
 		default:
 			err = internalDownloadError(symbol, "refetch bars", err)
 		}
@@ -529,12 +555,15 @@ func askedTickerBars(ctx context.Context, bars supplier.Marketdata, symbol, prov
 	}
 	// The retry failed; we don't know whether the symbol has prices, so
 	// report the failure, not "no price data".
+	if named := barsStatusError(symbol, provider, "get ohlc", err); named != nil {
+		return nil, named
+	}
 	return nil, internalDownloadError(symbol, "get ohlc", err)
 }
 
 // askedTickerFailure is the error a failed first ask for the asked ticker
-// fails the symbol with: the provider's block, its timeout, or the generic
-// download failure with the cause in the log.
+// fails the symbol with: the provider's block, its timeout, its HTTP error
+// status, or the generic download failure with the cause in the log.
 func askedTickerFailure(ctx context.Context, symbol, provider string, err error) error {
 	var blocked *marketdata.BlockedError
 	if errors.As(err, &blocked) {
@@ -542,6 +571,9 @@ func askedTickerFailure(ctx context.Context, symbol, provider string, err error)
 	}
 	if providerTimedOut(ctx, err) {
 		return &marketdata.TimeoutError{Provider: provider, Symbol: symbol}
+	}
+	if named := barsStatusError(symbol, provider, "get ohlc", err); named != nil {
+		return named
 	}
 	return internalDownloadError(symbol, "get ohlc", err)
 }
