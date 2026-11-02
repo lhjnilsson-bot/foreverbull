@@ -123,7 +123,7 @@ func (ns *NatsSubscriber) Subscribe(component, method string, cb func(context.Co
 				return
 			}
 			log.Err(err).Msg("error executing command")
-			if err := publishState(msg, pb.State_STATE_ERROR, err); err != nil {
+			if err := publishState(msg, pb.State_STATE_ERROR, stateError(err)); err != nil {
 				log.Err(err).Msg("error publishing state")
 			}
 			return

@@ -17,6 +17,7 @@ import (
 	"github.com/lhjnilsson/foreverbull/pkg/finance/internal/stream/dependency"
 	fs "github.com/lhjnilsson/foreverbull/pkg/finance/stream"
 	"github.com/lhjnilsson/foreverbull/pkg/finance/supplier"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 )
 
@@ -65,9 +66,10 @@ func SessionRun(ctx context.Context, msg stream.Message) error {
 	}
 
 	go func() {
-		err := server.Serve(listener)
-		if err != nil {
-			return
+		// Serve has no caller once SessionRun returns; a listener that dies
+		// is logged, and the client sees its connection refused.
+		if err := server.Serve(listener); err != nil {
+			log.Error().Err(err).Str("session", cmd.Id).Msg("error serving trading session server")
 		}
 	}()
 	go func() {
@@ -90,8 +92,10 @@ func SessionRun(ctx context.Context, msg stream.Message) error {
 		}
 	}()
 
-	if inErr := repository.UpdatePort(ctx, cmd.Id, port); inErr != nil {
-		return fmt.Errorf("error updating session status: %w", inErr)
+	if err := repository.UpdatePort(ctx, cmd.Id, port); err != nil {
+		// No client can reach a server whose port isn't stored.
+		server.Stop()
+		return stream.Unreachable(fmt.Errorf("error storing session port: %w", err))
 	}
 	return nil
 }

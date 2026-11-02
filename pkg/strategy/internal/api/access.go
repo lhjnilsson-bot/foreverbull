@@ -144,6 +144,7 @@ func (s *StrategyServer) createExperimentAuthed(
 	}
 	out, runErr := s.launcher.Run(ctx, stream.RunInput{
 		ExperimentID: experiment.GetId(),
+		StrategyName: req.GetStrategyName(),
 		BacktestName: req.GetBacktestName(),
 		BacktestID:   backtestID,
 		ServiceImage: version.GetServiceImage(),

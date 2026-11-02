@@ -183,7 +183,7 @@ func (bs *BacktestServer) createSessionAuthed(req *servicePb.CreateSessionReques
 	}
 	if err := bs.stream.Publish(ctx, msg, stream.WaitForCompletion()); err != nil {
 		auth.ForgetBacktestSecret(session.GetId())
-		return fmt.Errorf("error publishing session run command: %w", err)
+		return sessionRunError(session.GetBacktest(), err)
 	}
 	session, err = sessions.Get(ctx, session.GetId())
 	if err != nil {

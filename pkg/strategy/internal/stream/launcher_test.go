@@ -208,3 +208,24 @@ func TestSessionLauncherCloseFails(t *testing.T) {
 	require.EqualError(t, err, sentence)
 	require.Equal(t, "exec-1", out.ExecutionID)
 }
+
+// A session run whose services couldn't reach each other fails with the
+// sentence naming the backtest and the experiment's command.
+func TestSessionLauncherServicesUnreachable(t *testing.T) {
+	t.Parallel()
+
+	store := new(mockStore)
+	store.On("GetBacktest", mock.Anything, "spy").Return(&backtestpb.Backtest{
+		Name:    "spy",
+		Periods: []*backtestpb.Backtest_Period{spyPeriod()},
+	}, nil)
+	store.On("CreateSession", mock.Anything, "spy").Return(&backtestpb.Session{Id: "session-1"}, nil)
+	eventStream := new(stream.MockStream)
+	eventStream.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(stream.ErrServicesUnreachable)
+
+	launcher := &ss.SessionLauncher{Store: store, Stream: eventStream}
+	_, err := launcher.Run(context.Background(), ss.RunInput{BacktestName: "spy", StrategyName: "mean-rev"})
+	require.EqualError(t, err, "Couldn't run backtest 'spy': foreverbull's services couldn't reach each other. "+
+		"Run `fbenv status` to check that the environment is running, then run "+
+		"`fbull strategy experiment mean-rev --backtest spy` again.")
+}

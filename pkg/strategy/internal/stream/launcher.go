@@ -9,6 +9,7 @@ import (
 	"github.com/lhjnilsson/foreverbull/internal/auth"
 	"github.com/lhjnilsson/foreverbull/internal/environment"
 	"github.com/lhjnilsson/foreverbull/internal/stream"
+	"github.com/lhjnilsson/foreverbull/internal/usercopy"
 	"github.com/lhjnilsson/foreverbull/pkg/backtest"
 	backtestStream "github.com/lhjnilsson/foreverbull/pkg/backtest/stream"
 	common "github.com/lhjnilsson/foreverbull/pkg/pb"
@@ -197,7 +198,7 @@ func (l *SessionLauncher) openSession(ctx context.Context, in RunInput) (*backte
 	if err != nil {
 		return nil, "", fmt.Errorf("create backtest session: %w", err)
 	}
-	if err := l.publishSession(ctx, in.BacktestName, session.GetId()); err != nil {
+	if err := l.publishSession(ctx, in.StrategyName, in.BacktestName, session.GetId()); err != nil {
 		return nil, "", err
 	}
 	return session, "", nil
@@ -218,19 +219,31 @@ func (l *SessionLauncher) openOwnedSession(ctx context.Context, in RunInput) (*b
 	if err != nil {
 		return nil, "", err
 	}
-	if err := l.publishSession(ctx, in.BacktestName, session.GetId()); err != nil {
+	if err := l.publishSession(ctx, in.StrategyName, in.BacktestName, session.GetId()); err != nil {
 		auth.ForgetBacktestSecret(session.GetId())
 		return nil, "", err
 	}
 	return session, secret, nil
 }
 
-func (l *SessionLauncher) publishSession(ctx context.Context, name, sessionID string) error {
+// retryCommand is the command that runs the experiment again, or none
+// when the strategy isn't known.
+func (l *SessionLauncher) retryCommand(strategy, backtest string) string {
+	if strategy == "" {
+		return ""
+	}
+	return usercopy.ExperimentCommand(strategy, backtest)
+}
+
+func (l *SessionLauncher) publishSession(ctx context.Context, strategy, name, sessionID string) error {
 	msg, err := backtestStream.NewSessionRunCommand(name, sessionID)
 	if err != nil {
 		return fmt.Errorf("create session run command: %w", err)
 	}
 	if err := l.Stream.Publish(ctx, msg, stream.WaitForCompletion()); err != nil {
+		if errors.Is(err, stream.ErrServicesUnreachable) {
+			return errors.New(usercopy.BacktestRunUnreachable(name, l.retryCommand(strategy, name)))
+		}
 		return fmt.Errorf("start backtest session for %q (ingest it first with `fbull backtest create`): %w", name, err)
 	}
 	return nil
