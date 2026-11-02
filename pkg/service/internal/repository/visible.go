@@ -71,7 +71,7 @@ func serviceVisibleWhere(caller auth.Account) (string, []any) {
 // GetByID loads one service and its status history after the caller was authorized.
 func (db *Service) GetByID(ctx context.Context, id string) (*pb.Service, error) {
 	if id == "" {
-		return nil, errors.New("service not found")
+		return nil, ErrServiceNotFound
 	}
 	rows, err := db.Conn.Query(ctx, `
 		SELECT service.image, algorithm, ss.status, ss.error, ss.occurred_at,
@@ -128,7 +128,7 @@ func (db *Service) getByImageJoined(ctx context.Context, image string) (*pb.Serv
 		return nil, fmt.Errorf("failed to get service: %w", err)
 	}
 	if id == "" {
-		return nil, errors.New("service not found")
+		return nil, ErrServiceNotFound
 	}
 	return db.GetByID(ctx, id)
 }
@@ -154,7 +154,7 @@ func scanServiceRows(rows interface {
 		return nil, fmt.Errorf("failed to get service: %w", err)
 	}
 	if service.Image == "" {
-		return nil, errors.New("service not found")
+		return nil, ErrServiceNotFound
 	}
 	if len(algorithm) == 0 {
 		return &service, nil

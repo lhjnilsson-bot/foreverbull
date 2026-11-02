@@ -55,7 +55,7 @@ func (f *fakeServices) Get(_ context.Context, image string) (*pb.Service, error)
 			return item, nil
 		}
 	}
-	return nil, errors.New("service not found")
+	return nil, service.ErrNotFound
 }
 
 func sampleService() *pb.Service {

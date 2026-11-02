@@ -2,10 +2,14 @@ package command_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/lhjnilsson/foreverbull/internal/container"
 	"github.com/lhjnilsson/foreverbull/internal/stream"
+	"github.com/lhjnilsson/foreverbull/internal/test_helper"
 	"github.com/lhjnilsson/foreverbull/pkg/service/internal/stream/command"
+	"github.com/lhjnilsson/foreverbull/pkg/service/internal/stream/dependency"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -38,4 +42,16 @@ func TestUnimplementedCommands(t *testing.T) {
 			require.EqualError(t, err, c.want)
 		})
 	}
+}
+
+// Only a missing service row creates the service. A failed read stops the
+// start with that cause instead of inserting over it.
+func TestServiceStartFailsOnServiceReadError(t *testing.T) {
+	msg := new(stream.MockMessage)
+	msg.On("MustGet", stream.DBDep).Return(test_helper.FailingRowsConn{Err: errors.New("connection lost")})
+	msg.On("MustGet", dependency.ContainerDep).Return(new(container.MockEngine))
+	msg.On("ParsePayload", mock.Anything).Return(nil)
+
+	err := command.ServiceStart(context.Background(), msg)
+	require.EqualError(t, err, "error getting service: failed to read service: connection lost")
 }
