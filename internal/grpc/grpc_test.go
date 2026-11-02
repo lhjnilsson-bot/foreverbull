@@ -92,3 +92,23 @@ func TestReadScopeAllowsOnlyReadRPCs(t *testing.T) {
 	require.Equal(t, codes.PermissionDenied, status.Code(roleAllowsMethod(viewer, create)))
 	require.NoError(t, roleAllowsMethod(viewer, get))
 }
+
+// GetIndex fans out one provider lookup per index member, so a viewer or a
+// read token may not call it. GetAsset stays readable.
+func TestGetIndexIsNotAReadRPC(t *testing.T) {
+	t.Setenv(environment.AuthEnabled, "true")
+
+	const (
+		getIndex = "/foreverbull.finance.service.v1.Marketdata/GetIndex"
+		getAsset = "/foreverbull.finance.service.v1.Marketdata/GetAsset"
+	)
+	viewer := auth.Account{ID: "a", Role: auth.RoleViewer}
+	read := auth.Account{ID: "a", Role: auth.RoleEditor, Scope: auth.ScopeRead}
+	editor := auth.Account{ID: "a", Role: auth.RoleEditor, Scope: auth.ScopeWrite}
+
+	require.Equal(t, codes.PermissionDenied, status.Code(roleAllowsMethod(viewer, getIndex)))
+	require.Equal(t, codes.PermissionDenied, status.Code(roleAllowsMethod(read, getIndex)))
+	require.NoError(t, roleAllowsMethod(editor, getIndex))
+	require.NoError(t, roleAllowsMethod(viewer, getAsset))
+	require.NoError(t, roleAllowsMethod(read, getAsset))
+}

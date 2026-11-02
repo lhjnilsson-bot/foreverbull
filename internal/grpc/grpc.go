@@ -287,7 +287,7 @@ func viewerMayCall(fullMethod string) bool {
 	switch methodName(fullMethod) {
 	case "ListBacktests", "GetBacktest", "GetSession", "ListExecutions", "GetExecution",
 		"GetStrategy", "ListStrategies", "GetExperiment", "ListExperiments", "ListDeploymentRuns",
-		"GetAsset", "GetIndex":
+		"GetAsset":
 		return true
 	default:
 		return false
