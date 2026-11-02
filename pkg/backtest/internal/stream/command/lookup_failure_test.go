@@ -171,7 +171,7 @@ func TestMixedCoverageMessageJoinsTheSteps(t *testing.T) {
 	start := time.Date(2024, 2, 15, 0, 0, 0, 0, time.UTC)
 	gaps := []symbolGaps{{symbol: "NEWCO", noneBefore: start}}
 	misses := []lookupMiss{miss("XYZ", false, lookupErr(finance.LookupHTTP, "alpaca", 503))}
-	err := plainSentence(mixedCoverageMessage("oef-2024q1", "alpaca", []time.Time{day, start}, gaps, misses, true))
+	err := plainSentence(mixedCoverageMessage("oef-2024q1", "alpaca", []time.Time{day, start}, gaps, misses, nil, true))
 	require.EqualError(t, err, "Couldn't load data for backtest 'oef-2024q1': 2 symbols are missing prices or "+
 		"couldn't be checked. The backtest wasn't saved.\n"+
 		"  NEWCO: no prices before 2024-02-15.\n"+
@@ -182,7 +182,7 @@ func TestMixedCoverageMessageJoinsTheSteps(t *testing.T) {
 
 	inside := []symbolGaps{{symbol: "AAA", sessions: []int{0}}}
 	err = plainSentence(mixedCoverageMessage("oef-2024q1", "yahoo", []time.Time{day}, inside,
-		[]lookupMiss{miss("XYZ", true, lookupErr(finance.LookupHTTP, "yahoo", 429))}, false))
+		[]lookupMiss{miss("XYZ", true, lookupErr(finance.LookupHTTP, "yahoo", 429))}, nil, false))
 	require.EqualError(t, err, "Couldn't load data for backtest 'oef-2024q1': 2 symbols are missing prices or "+
 		"couldn't be checked. The backtest was partly saved and couldn't be removed.\n"+
 		"  AAA: 2024-02-14\n"+

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/lhjnilsson/foreverbull/pkg/finance"
+	financeapi "github.com/lhjnilsson/foreverbull/pkg/finance/api"
 )
 
 // lookupMiss is one symbol whose listing or delisting lookup failed.
@@ -17,27 +18,18 @@ type lookupMiss struct {
 	cause   *finance.LookupError
 }
 
-// stepKind is one next step. Several failures join their steps in this order.
-type stepKind int
+// stepKind is one next step. Several failures join their steps in
+// financeapi.Steps order. The wording lives in pkg/finance/api, with the
+// causes, so one file holds every sentence a failed lookup or download shows.
+type stepKind = financeapi.Step
 
 const (
-	stepNetwork stepKind = iota
-	stepServer
-	stepRate
-	stepAlpacaKey
-	stepRefused
-	stepParse
-)
-
-const (
-	stepNetworkText = "Check your internet connection, then run `fbull backtest create` again."
-	stepServerText  = "Run `fbull backtest create` again in a few minutes, or try another provider with --provider."
-	stepRateText    = "Wait a few minutes, then run `fbull backtest create` again, or try another provider with --provider."
-	stepAlpacaText  = "Check that your alpaca API key and secret work for paper trading, or try another provider with --provider, " +
-		"then run `fbull backtest create` again."
-	stepRefusedText = "Try another provider with --provider, then run `fbull backtest create` again."
-	stepParseText   = "Try another provider with --provider, then run `fbull backtest create` again. " +
-		"If it keeps happening, please report it at https://github.com/lhjnilsson/foreverbull/issues with this message."
+	stepNetwork   = financeapi.StepNetwork
+	stepServer    = financeapi.StepServer
+	stepRate      = financeapi.StepRate
+	stepAlpacaKey = financeapi.StepPaperKey
+	stepRefused   = financeapi.StepRefused
+	stepParse     = financeapi.StepParse
 )
 
 // lookupCause is the phrase after the colon, and which step it offers.
@@ -54,15 +46,15 @@ func lookupCause(provider string, err *finance.LookupError) (string, stepKind) {
 	case finance.LookupHTTP:
 		switch {
 		case err.Status == http.StatusTooManyRequests:
-			return name + " limited how many requests foreverbull can make", stepRate
+			return financeapi.RateLimitedCause(name), stepRate
 		case err.Status >= 500 && err.Status <= 599:
-			return fmt.Sprintf("%s had a server error (HTTP %d)", name, err.Status), stepServer
+			return financeapi.ServerErrorCause(name, err.Status), stepServer
 		case name == "alpaca" && (err.Status == http.StatusUnauthorized || err.Status == http.StatusForbidden):
 			// foreverbull checks the key on alpaca's paper trading API, so a
 			// live-only key can be refused there. The cause says which API it was.
 			return fmt.Sprintf("alpaca's paper trading API didn't accept foreverbull's API key (HTTP %d)", err.Status), stepAlpacaKey
 		default:
-			return fmt.Sprintf("%s refused the request (HTTP %d)", name, err.Status), stepRefused
+			return financeapi.RefusedCause(name, err.Status), stepRefused
 		}
 	default:
 		return name + "'s answer couldn't be read", stepParse
@@ -70,22 +62,7 @@ func lookupCause(provider string, err *finance.LookupError) (string, stepKind) {
 }
 
 func stepText(kind stepKind) string {
-	switch kind {
-	case stepNetwork:
-		return stepNetworkText
-	case stepServer:
-		return stepServerText
-	case stepRate:
-		return stepRateText
-	case stepAlpacaKey:
-		return stepAlpacaText
-	case stepRefused:
-		return stepRefusedText
-	case stepParse:
-		return stepParseText
-	default:
-		return stepParseText
-	}
+	return financeapi.StepText(kind, financeapi.CreateForm)
 }
 
 // providerAdvice is the step clause that names --provider. A message offers
@@ -110,7 +87,7 @@ func joinSteps(kinds []stepKind, extra string) string {
 		offered = offered || strings.Contains(strings.ToLower(step), providerAdvice)
 		steps = append(steps, step)
 	}
-	for _, kind := range []stepKind{stepNetwork, stepServer, stepRate, stepAlpacaKey, stepRefused, stepParse} {
+	for _, kind := range financeapi.Steps {
 		if containsKind(kinds, kind) {
 			add(stepText(kind))
 		}
@@ -218,19 +195,27 @@ func lookupFailureMessage(name, provider string, misses []lookupMiss, removed bo
 	return strings.Join(append(lines, next), "\n")
 }
 
-// mixedCoverageMessage is the create error when lookup failures share the
-// message with missing prices or an unconfirmed edge. The step is the union
-// of both.
-func mixedCoverageMessage(name, provider string, days []time.Time, gaps []symbolGaps, misses []lookupMiss, removed bool) string {
+// mixedCoverageMessage is the create error when lookup or download failures
+// share the message with missing prices, an unconfirmed edge, or each
+// other. The step is the union of all of them.
+func mixedCoverageMessage(name, provider string, days []time.Time, gaps []symbolGaps, misses []lookupMiss,
+	downloads []downloadMiss, removed bool,
+) string {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	saved, _ := savedAndNext(name, "", removed)
 	// savedAndNext's next is rebuilt below so the union, not one step, follows
 	// the delete-first sentence when the backtest couldn't be removed.
-	next := joinSteps(missKinds(provider, misses), coverageStep(days, gaps))
+	// Lookup and download failures can share the block with no gap at all,
+	// and then there is no coverage step.
+	coverage := ""
+	if len(gaps) > 0 {
+		coverage = coverageStep(days, gaps)
+	}
+	next := joinSteps(append(missKinds(provider, misses), downloadKinds(downloads)...), coverage)
 	if !removed {
 		next = deleteFirst(name, next)
 	}
-	order, edges, rest := mixedLines(provider, days, gaps, misses)
+	order, edges, rest := mixedLines(provider, days, gaps, misses, downloads)
 	n := len(order)
 	verb := "are"
 	if n == 1 {
@@ -253,8 +238,10 @@ func mixedCoverageMessage(name, provider string, days []time.Time, gaps []symbol
 
 // mixedLines lists the symbols in the order they are counted, and their
 // lines: first the unconfirmed edges, whose reason line follows them, then
-// the other gaps and the failed lookups.
-func mixedLines(provider string, days []time.Time, gaps []symbolGaps, misses []lookupMiss) ([]string, []string, []string) {
+// the other gaps, the failed lookups, and the failed downloads.
+func mixedLines(provider string, days []time.Time, gaps []symbolGaps, misses []lookupMiss,
+	downloads []downloadMiss,
+) ([]string, []string, []string) {
 	var order []string
 	seen := make(map[string]bool)
 	add := func(symbol string) {
@@ -276,6 +263,11 @@ func mixedLines(provider string, days []time.Time, gaps []symbolGaps, misses []l
 		add(miss.symbol)
 		missBy[miss.symbol] = append(missBy[miss.symbol], miss)
 	}
+	downloadBy := make(map[string][]downloadMiss)
+	for _, download := range downloads {
+		add(download.symbol)
+		downloadBy[download.symbol] = append(downloadBy[download.symbol], download)
+	}
 	gapBy := make(map[string]symbolGaps, len(gaps))
 	for _, gap := range gaps {
 		if !gap.atEdge() {
@@ -290,6 +282,9 @@ func mixedLines(provider string, days []time.Time, gaps []symbolGaps, misses []l
 		for _, miss := range missBy[symbol] {
 			cause, _ := lookupCause(provider, miss.cause)
 			rest = append(rest, fmt.Sprintf("  %s: couldn't check %s: %s.", miss.symbol, lookupCheck(miss.listing), cause))
+		}
+		for _, download := range downloadBy[symbol] {
+			rest = append(rest, downloadLine(download))
 		}
 	}
 	return order, edges, rest
