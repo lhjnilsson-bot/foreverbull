@@ -158,7 +158,11 @@ func (h *handlers) upsertGitHub(ctx context.Context, identity githubIdentity) (A
 		JOIN account AS a ON a.id = g.account_id
 		WHERE g.github_subject = $1`, identity.Subject).Scan(&account.ID, &account.Role)
 	if err == nil {
-		_, _ = h.db.Exec(ctx, `UPDATE account_github SET github_login = $2 WHERE account_id = $1`, account.ID, identity.Login)
+		// A GitHub login can change. Grants and owner lookups match on it,
+		// so a stale login could point them at the wrong account.
+		if _, err := h.db.Exec(ctx, `UPDATE account_github SET github_login = $2 WHERE account_id = $1`, account.ID, identity.Login); err != nil {
+			return Account{}, fmt.Errorf("refresh github login: %w", err)
+		}
 		return account, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
