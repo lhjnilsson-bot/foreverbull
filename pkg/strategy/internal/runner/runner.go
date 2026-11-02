@@ -12,6 +12,7 @@ import (
 	commonpb "github.com/lhjnilsson/foreverbull/pkg/pb"
 	financepb "github.com/lhjnilsson/foreverbull/pkg/pb/finance"
 	pb "github.com/lhjnilsson/foreverbull/pkg/pb/strategy"
+	"github.com/lhjnilsson/foreverbull/pkg/strategy/internal/repository"
 	"github.com/rs/zerolog/log"
 )
 
@@ -144,7 +145,7 @@ func (r *InProcess) loop(ctx context.Context, deploymentID string) {
 
 		d, err := r.store.GetDeployment(ctx, deploymentID)
 		if err != nil {
-			log.Error().Err(err).Str("deployment", deploymentID).Msg("runner get deployment")
+			r.fail(ctx, deploymentID, fmt.Errorf("get deployment: %w", err))
 			return
 		}
 		if d.Status != pb.Deployment_RUNNING {
@@ -161,15 +162,13 @@ func (r *InProcess) loop(ctx context.Context, deploymentID string) {
 			continue
 		}
 		if err != nil {
-			log.Error().Err(err).Str("deployment", deploymentID).Msg("runner next close")
-			_ = r.store.UpdateStatus(ctx, deploymentID, pb.Deployment_ERROR, err)
+			r.fail(ctx, deploymentID, fmt.Errorf("next close: %w", err))
 			return
 		}
 
 		if r.clock.Now().After(session.Close) {
 			if err := r.SkipMissed(ctx, deploymentID, *session); err != nil {
-				log.Error().Err(err).Str("deployment", deploymentID).Msg("runner skip missed close")
-				_ = r.store.UpdateStatus(ctx, deploymentID, pb.Deployment_ERROR, err)
+				r.fail(ctx, deploymentID, fmt.Errorf("skip missed close: %w", err))
 				return
 			}
 			continue
@@ -179,10 +178,27 @@ func (r *InProcess) loop(ctx context.Context, deploymentID string) {
 			return
 		}
 		if err := r.ProcessSession(ctx, deploymentID, *session); err != nil {
-			log.Error().Err(err).Str("deployment", deploymentID).Msg("runner process session")
-			_ = r.store.UpdateStatus(ctx, deploymentID, pb.Deployment_ERROR, err)
+			r.fail(ctx, deploymentID, fmt.Errorf("process session: %w", err))
 			return
 		}
+	}
+}
+
+// fail stores cause as the deployment's ERROR; the loop then ends. A loop
+// stopped through ctx is not a failure: StopDeployment already wrote
+// STOPPED, and at shutdown the row stays running so Start resumes it. The
+// write is detached from ctx and bounded. The loop has no caller, so a
+// status write that fails too is logged with both causes.
+func (r *InProcess) fail(ctx context.Context, deploymentID string, cause error) {
+	if ctx.Err() != nil {
+		return
+	}
+	log.Error().Err(cause).Str("deployment", deploymentID).Msg("deployment runner failed")
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), repository.StatusWriteTimeout)
+	defer cancel()
+	if err := r.store.UpdateStatus(writeCtx, deploymentID, pb.Deployment_ERROR, cause); err != nil {
+		log.Error().Err(err).AnErr("cause", cause).Str("deployment", deploymentID).
+			Msg("deployment runner failed and the deployment couldn't be marked as an error")
 	}
 }
 
