@@ -15,6 +15,7 @@ import (
 	servicepb "github.com/lhjnilsson/foreverbull/pkg/pb/service"
 	pb "github.com/lhjnilsson/foreverbull/pkg/pb/strategy"
 	servicePb "github.com/lhjnilsson/foreverbull/pkg/pb/strategy/service"
+	"github.com/lhjnilsson/foreverbull/pkg/service"
 	"github.com/lhjnilsson/foreverbull/pkg/strategy/internal/api"
 	ss "github.com/lhjnilsson/foreverbull/pkg/strategy/internal/stream"
 	"github.com/stretchr/testify/require"
@@ -235,7 +236,7 @@ func TestHTTP(t *testing.T) {
 	})
 
 	t.Run("start missing service", func(t *testing.T) {
-		lookup := &fakeServiceLookup{err: errors.New("service not found")}
+		lookup := &fakeServiceLookup{err: service.ErrNotFound}
 		launcher := &fakeLauncher{}
 		mux := http.NewServeMux()
 		api.RegisterExecutionHTTP(mux, lookup, launcher)

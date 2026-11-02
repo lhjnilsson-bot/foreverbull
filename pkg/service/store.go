@@ -1,6 +1,8 @@
 package service
 
 import (
+	"errors"
+
 	"github.com/lhjnilsson/foreverbull/internal/postgres"
 	"github.com/lhjnilsson/foreverbull/pkg/service/internal/repository"
 )
@@ -12,8 +14,11 @@ func NewStore(conn postgres.Query) ServiceStore {
 	return &repository.Service{Conn: conn}
 }
 
-// IsNotFound reports a missing image. repository.Service.Get uses this text,
-// not pgx.ErrNoRows.
+// ErrNotFound is a service image with no row. A store's other errors are
+// read failures, not "not found".
+var ErrNotFound = repository.ErrServiceNotFound
+
+// IsNotFound reports a missing image: ErrNotFound, not pgx.ErrNoRows.
 func IsNotFound(err error) bool {
-	return err != nil && err.Error() == "service not found"
+	return errors.Is(err, ErrNotFound)
 }

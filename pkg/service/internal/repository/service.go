@@ -13,6 +13,10 @@ import (
 	pb "github.com/lhjnilsson/foreverbull/pkg/pb/service"
 )
 
+// ErrServiceNotFound is a service image with no row. Any other read error
+// is not "not found".
+var ErrServiceNotFound = errors.New("service not found")
+
 const ServiceTable = `CREATE TABLE IF NOT EXISTS service (
 image text PRIMARY KEY,
 algorithm JSONB,
@@ -246,7 +250,7 @@ func (db *Service) Get(ctx context.Context, image string) (*pb.Service, error) {
 	}
 
 	if service.Image == "" {
-		return nil, errors.New("service not found")
+		return nil, ErrServiceNotFound
 	}
 
 	if algorithm == nil {

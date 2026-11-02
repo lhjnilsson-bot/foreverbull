@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -52,12 +53,12 @@ func ServiceStart(ctx context.Context, message stream.Message) error {
 
 	services := repository.Service{Conn: postgres}
 	_, err = services.Get(ctx, command.Image)
-
-	if err != nil {
-		_, crErr := services.Create(ctx, command.Image)
-		if crErr != nil {
-			return fmt.Errorf("error creating service: %w", crErr)
+	if errors.Is(err, repository.ErrServiceNotFound) {
+		if _, err := services.Create(ctx, command.Image); err != nil {
+			return fmt.Errorf("error creating service: %w", err)
 		}
+	} else if err != nil {
+		return fmt.Errorf("error getting service: %w", err)
 	}
 
 	provider := strings.TrimSpace(command.OHLCProvider)
