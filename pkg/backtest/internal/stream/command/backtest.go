@@ -801,8 +801,17 @@ func DownloadFinancialData(ctx context.Context, msg stream.Message) error {
 		progress.symbolDone()
 	}
 
-	return checkMissingSessions(ctx, msg, db, backtests, command.BacktestName, backtestID,
+	err = checkMissingSessions(ctx, msg, db, backtests, command.BacktestName, backtestID,
 		strings.ToLower(provider), b.GetProfile(), symbols, reported, period, downloads)
+	if err != nil {
+		return err
+	}
+	if len(period.notices) > 0 {
+		// The backtest is kept. The notice rides on the completed
+		// DOWNLOADING step, so the CLI prints it.
+		return &stream.Notice{Lines: period.notices}
+	}
+	return nil
 }
 
 // isNoPriceDataError reports the finance service's no-bars STATUS_ERROR.

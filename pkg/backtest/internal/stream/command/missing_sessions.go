@@ -509,10 +509,12 @@ func unitBars(units []checkUnit, bars map[string]*repository.SymbolBars) map[str
 // closedPeriod is the backtest period as the check reads it: its end capped
 // at the last completed session, which every provider's fetch stops at, so
 // today's unfinished session is not missing, and the period's sessions up
-// to there.
+// to there. notices say which sessions the cap left out, for the
+// DOWNLOADING step to show once create passes.
 type closedPeriod struct {
 	start, end time.Time
 	sessions   []time.Time
+	notices    []string
 }
 
 // ziplineFrom is the engine the check and the ingest share.
@@ -552,11 +554,43 @@ func readClosedPeriod(ctx context.Context, msg stream.Message, backtests reposit
 		}
 	}
 	if len(period.sessions) > 0 {
+		if !last.Before(end) {
+			return period, nil
+		}
+		notice, err := unclosedSessionsNotice(ctx, ziplineEngine, end, last)
+		var calendarEnd *engine.CalendarEndError
+		if errors.As(err, &calendarEnd) {
+			return period, discardPastCalendar(ctx, backtests, name, id, end, calendarEnd)
+		}
+		if err != nil {
+			return period, discardFailedIngest(ctx, backtests, name, id, err)
+		}
+		if notice != "" {
+			period.notices = []string{notice}
+		}
 		return period, nil
+	}
+	// Neither read below ends after end, so a read past the calendar means
+	// the backtest ends after it.
+	discardEmpty := func(err error) error {
+		var calendarEnd *engine.CalendarEndError
+		if errors.As(err, &calendarEnd) {
+			return discardPastCalendar(ctx, backtests, name, id, end, calendarEnd)
+		}
+		return discardFailedIngest(ctx, backtests, name, id, err)
+	}
+	// hasUnclosedSession reads at most recentSessionDays of a period after
+	// last and none of one that starts later, so an end past that is read
+	// on its own: an end after the calendar fails create before the
+	// not-closed-yet sentence.
+	if end.After(last.AddDate(0, 0, recentSessionDays)) {
+		if _, err := ziplineEngine.Sessions(ctx, end, end); err != nil {
+			return period, discardEmpty(err)
+		}
 	}
 	notClosed, err := hasUnclosedSession(ctx, ziplineEngine, start, end, last)
 	if err != nil {
-		return period, discardFailedIngest(ctx, backtests, name, id, err)
+		return period, discardEmpty(err)
 	}
 	var lastSession time.Time
 	if notClosed {
@@ -634,6 +668,85 @@ func noSessionMessage(name string, start, end time.Time, removed bool) string {
 	saved, next := savedAndNext(name, "Choose dates that include a trading day, then run `fbull backtest create` again.", removed)
 	return fmt.Sprintf("Couldn't load data for backtest '%s': there's no trading session between %s and %s. %s %s",
 		name, start.Format(time.DateOnly), end.Format(time.DateOnly), saved, next)
+}
+
+// unclosedSessionsNotice names the sessions after last, the last completed
+// session date, up to end that the cap at last leaves out: a real XNYS
+// session that hasn't closed yet, such as today's while it is open. It is
+// empty when there is none, such as an end on today's weekend. The period
+// has a closed session, so last is at most a few days before today, and the
+// calendar is read for recentSessionDays from it at most. An end past that
+// read, which only a backtest file can ask for, is not a session itself
+// when it falls on a weekend or holiday, so the range ends at the last
+// session on or before it, read from the recentSessionDays up to it.
+func unclosedSessionsNotice(ctx context.Context, ziplineEngine engine.Engine, end, last time.Time) (string, error) {
+	from := last.AddDate(0, 0, 1)
+	to := from.AddDate(0, 0, recentSessionDays)
+	if end.Before(to) {
+		to = end
+	}
+	sessions, err := ziplineEngine.Sessions(ctx, from, to)
+	if err != nil {
+		return "", err
+	}
+	if len(sessions) == 0 && end.After(to) {
+		// Any recentSessionDays span holds a session.
+		return "", fmt.Errorf("no XNYS session in the %d days from %s", recentSessionDays, from.Format(time.DateOnly))
+	}
+	if len(sessions) == 0 {
+		return "", nil
+	}
+	through := sessions[len(sessions)-1]
+	if end.After(to) {
+		through, err = lastSessionThrough(ctx, ziplineEngine, end)
+		if err != nil {
+			return "", err
+		}
+	}
+	return finance.UnclosedSessionsNotice(sessions[0], through), nil
+}
+
+// lastSessionThrough is the last XNYS session on or before end, read from
+// the recentSessionDays up to end, a span that always holds a session.
+func lastSessionThrough(ctx context.Context, ziplineEngine engine.Engine, end time.Time) (time.Time, error) {
+	sessions, err := ziplineEngine.Sessions(ctx, end.AddDate(0, 0, -recentSessionDays), end)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if len(sessions) == 0 {
+		return time.Time{}, fmt.Errorf("no XNYS session in the %d days to %s", recentSessionDays, end.Format(time.DateOnly))
+	}
+	return sessions[len(sessions)-1], nil
+}
+
+// discardPastCalendar fails create for a backtest that ends after the last
+// session of the engine's calendar, which is loaded about a year ahead, and
+// removes it like every other failed create. The message is a plain
+// sentence with no details: the calendar's own text is only logged.
+func discardPastCalendar(ctx context.Context, backtests repository.Backtest, name, id string, end time.Time,
+	calendarEnd *engine.CalendarEndError,
+) error {
+	log.Warn().Err(calendarEnd).Str("backtest", name).Str("end", end.Format(time.DateOnly)).
+		Msg("backtest ends after the engine's calendar")
+	err := deleteAfterFailure(ctx, backtests, name, id)
+	removed := err == nil || errors.Is(err, pgx.ErrNoRows)
+	if !removed {
+		log.Warn().Err(err).Str("backtest", name).Msg("error deleting backtest that ends after the calendar")
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return plainSentence(pastCalendarMessage(name, end, calendarEnd.LastSession, removed))
+}
+
+// pastCalendarMessage is the message when a backtest ends after the last
+// trading day of the market calendar.
+func pastCalendarMessage(name string, end, lastSession time.Time, removed bool) string {
+	last := lastSession.Format(time.DateOnly)
+	saved, next := savedAndNext(name,
+		fmt.Sprintf("Choose an end on or before %s, then run `fbull backtest create` again.", last), removed)
+	return fmt.Sprintf("Couldn't load data for backtest '%s': it ends on %s, after the last trading day in "+
+		"foreverbull's market calendar (%s). %s %s", name, end.Format(time.DateOnly), last, saved, next)
 }
 
 // checkMissingSessions fails create when a symbol has no bar on a session
