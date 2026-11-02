@@ -374,6 +374,64 @@ def test_backtest_create_prints_each_step_notice_once(monkeypatch):
     assert shown == [f"⚠ {line}" for line in lines]
 
 
+_UNCLOSED_END_SESSION = (
+    "2026-10-30 isn't included because its trading session hasn't closed yet "
+    "(sessions count as closed at 16:30 New York time)."
+)
+
+
+def _download_notice_stream(lines: list[str]):
+    def stream(**_kwargs):
+        yield backtest_service_pb.CreateBacktestResponse(
+            CREATING=common_pb.Step(state=common_pb.State.UNSPECIFIED),
+            DOWNLOADING=common_pb.Step(state=common_pb.State.UNSPECIFIED),
+            INGESTING=common_pb.Step(state=common_pb.State.UNSPECIFIED),
+            STORING=common_pb.Step(state=common_pb.State.UNSPECIFIED),
+        )
+        # The broker's notice for a session it left out rides on the
+        # completed DOWNLOADING step.
+        yield backtest_service_pb.CreateBacktestResponse(
+            CREATING=common_pb.Step(state=common_pb.State.COMPLETED),
+            DOWNLOADING=common_pb.Step(state=common_pb.State.COMPLETED, notices=lines),
+            INGESTING=common_pb.Step(state=common_pb.State.COMPLETED),
+        )
+
+    return stream
+
+
+@pytest.mark.parametrize("provider", ["yahoo", "stooq", "alpaca"])
+def test_backtest_create_prints_the_unclosed_end_session_line(provider, monkeypatch):
+    """The end date's open session is left out, and the CLI prints the broker's line as sent, after the rows."""
+    monkeypatch.setenv("TTY_COMPATIBLE", "0")
+    monkeypatch.setenv("LOGGING_LEVEL", "ERROR")
+    with patch("foreverbull.broker.backtest.create", side_effect=_download_notice_stream([_UNCLOSED_END_SESSION])):
+        result = _create_from_file(provider)
+
+    assert result.exit_code == 0
+    assert result.output.splitlines()[0] == f"Using provider: {provider} (from --provider)"
+    assert [line for line in result.output.splitlines() if "⚠" in line] == [
+        (
+            "⚠ 2026-10-30 isn't included because its trading session hasn't closed yet "
+            "(sessions count as closed at 16:30 New York time)."
+        )
+    ]
+    assert result.output.endswith(
+        "\n⚠ 2026-10-30 isn't included because its trading session hasn't closed yet "
+        "(sessions count as closed at 16:30 New York time).\n"
+    )
+
+
+def test_backtest_create_without_a_download_notice_prints_no_warning(monkeypatch):
+    """An end date in the past, or one whose session has closed, sends no notice and gets no ⚠ line."""
+    monkeypatch.setenv("TTY_COMPATIBLE", "0")
+    monkeypatch.setenv("LOGGING_LEVEL", "ERROR")
+    with patch("foreverbull.broker.backtest.create", side_effect=_download_notice_stream([])):
+        result = _create_from_file()
+
+    assert result.exit_code == 0
+    assert "⚠" not in result.output
+
+
 _MISSING_ONE_DAY = (
     "Couldn't load data for backtest 'oef-2024q1': yahoo is missing prices for XYZ on 2024-02-14, a trading day. "
     "The backtest wasn't saved. Try another provider with --provider, or change the backtest dates, then run "
