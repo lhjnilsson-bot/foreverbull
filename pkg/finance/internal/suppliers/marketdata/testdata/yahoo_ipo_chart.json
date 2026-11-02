@@ -1,0 +1,20 @@
+{
+  "chart": {
+    "result": [
+      {
+        "meta": {
+          "currency": "USD",
+          "symbol": "XYZ",
+          "exchangeName": "NMS",
+          "instrumentType": "EQUITY",
+          "firstTradeDate": 1710509400,
+          "timezone": "EDT",
+          "gmtoffset": -14400
+        },
+        "timestamp": [],
+        "indicators": { "quote": [] }
+      }
+    ],
+    "error": null
+  }
+}

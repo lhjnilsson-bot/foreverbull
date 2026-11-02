@@ -15,6 +15,7 @@ import (
 
 	"github.com/lhjnilsson/foreverbull/pkg/finance/supplier"
 	pb "github.com/lhjnilsson/foreverbull/pkg/pb/finance"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -271,24 +272,13 @@ func (y *YahooClient) GetAsset(ctx context.Context, symbol string) (*pb.Asset, e
 }
 
 func (m *YahooClient) SearchAsset(ctx context.Context, q string) ([]*pb.Asset, error) {
-	resp, err := m.doRequest(ctx, m.searchRequestURL(q))
+	symbols, err := m.searchSymbols(ctx, q)
 	if err != nil {
-		return nil, fmt.Errorf("error: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fail to search asset: %s", resp.Status)
-	}
-	var data map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&data)
-	if err != nil {
-		return nil, fmt.Errorf("error decoding response: %w", err)
+		return nil, err
 	}
 
 	assets := make([]*pb.Asset, 0)
-	for _, quote := range data["quotes"].([]interface{}) {
-		quoteMap := quote.(map[string]interface{})
-		symbol := quoteMap["symbol"].(string)
+	for _, symbol := range symbols {
 		a, err := m.GetAsset(ctx, symbol)
 		if errors.Is(err, ErrNoISIN) {
 			// An equity without an ISIN can't match the search by
@@ -301,6 +291,141 @@ func (m *YahooClient) SearchAsset(ctx context.Context, q string) ([]*pb.Asset, e
 		assets = append(assets, a)
 	}
 	return assets, nil
+}
+
+// SearchSymbols is the search that separates "nothing listed" from a failed
+// request. An empty slice is nothing listed. An error is a failed request.
+func (m *YahooClient) SearchSymbols(ctx context.Context, q string) ([]string, error) {
+	return m.searchSymbols(ctx, q)
+}
+
+// searchSymbols is the search that separates "nothing listed" from a failed
+// request. An empty quotes array is nothing listed. A missing quotes field,
+// a null, or a non-200 is a failed request: it is not "not found".
+func (m *YahooClient) searchSymbols(ctx context.Context, q string) ([]string, error) {
+	symbol := strings.ToUpper(strings.TrimSpace(q))
+	resp, err := m.doRequest(ctx, m.searchRequestURL(q))
+	if err != nil {
+		return nil, lookupTransport("search", symbol, ctx, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		log.Warn().Err(err).Str("symbol", symbol).Msg("yahoo search response couldn't be read")
+		return nil, fmt.Errorf("yahoo search for %s couldn't be read", symbol)
+	}
+	// A bot-check page is a failed lookup, including when the status is 200.
+	if err := blockedError("yahoo", symbol, resp.Header.Get("Content-Type"), body); err != nil {
+		log.Warn().Str("symbol", symbol).Msg("yahoo search answered with a bot check")
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, lookupStatus("search", symbol, resp.StatusCode, resp.Status)
+	}
+	found, err := parseSearchSymbols(body)
+	if err != nil {
+		log.Warn().Err(err).Str("symbol", symbol).Msg("yahoo search response couldn't be read")
+		return nil, err
+	}
+	return found, nil
+}
+
+// parseSearchSymbols reads the search body. quotes must be present. An empty
+// array is a completed search that listed nothing.
+func parseSearchSymbols(body []byte) ([]string, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("error decoding response: %w", err)
+	}
+	quotes, ok := raw["quotes"]
+	if !ok || string(quotes) == "null" {
+		return nil, errors.New("yahoo search did not say whether any symbol is listed")
+	}
+	var list []struct {
+		Symbol string `json:"symbol"`
+	}
+	if err := json.Unmarshal(quotes, &list); err != nil {
+		return nil, fmt.Errorf("yahoo search did not say whether any symbol is listed: %w", err)
+	}
+	symbols := make([]string, 0, len(list))
+	for _, quote := range list {
+		symbol := strings.TrimSpace(quote.Symbol)
+		if symbol == "" {
+			return nil, errors.New("yahoo search did not say whether any symbol is listed")
+		}
+		symbols = append(symbols, symbol)
+	}
+	return symbols, nil
+}
+
+// FirstTradeDate is the New York calendar date of the chart's firstTradeDate.
+// A chart that does not name one is an error: that is not "no listing date".
+func (y *YahooClient) FirstTradeDate(ctx context.Context, symbol string) (time.Time, error) {
+	chartURL := y.chartURL
+	if chartURL == "" {
+		chartURL = defaultYahooChartURL
+	}
+	now := clockNow(y.now)
+	start := now.AddDate(-1, 0, 0)
+	params := []string{
+		fmt.Sprintf("period1=%d", start.Unix()),
+		fmt.Sprintf("period2=%d", now.Unix()),
+		"interval=1d",
+	}
+	asked := strings.ToUpper(strings.TrimSpace(symbol))
+	resp, err := y.doRequest(ctx, chartURL+url.PathEscape(yahooSymbol(symbol)), params...)
+	if err != nil {
+		return time.Time{}, lookupTransport("listing date", asked, ctx, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		log.Warn().Err(err).Str("symbol", asked).Msg("yahoo listing date response couldn't be read")
+		return time.Time{}, fmt.Errorf("yahoo listing date for %s couldn't be read", asked)
+	}
+	if err := blockedError("yahoo", asked, resp.Header.Get("Content-Type"), body); err != nil {
+		log.Warn().Str("symbol", asked).Msg("yahoo listing date answered with a bot check")
+		return time.Time{}, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return time.Time{}, lookupStatus("listing date", asked, resp.StatusCode, resp.Status)
+	}
+	return firstTradeDate(asked, body)
+}
+
+// FirstTradeDateFromChart reads meta.firstTradeDate from a recorded chart body.
+func FirstTradeDateFromChart(symbol string, body []byte) (time.Time, error) {
+	return firstTradeDate(symbol, body)
+}
+
+// firstTradeDate reads meta.firstTradeDate. The field is unix seconds
+// (or milliseconds, when the value is that large) of the first session.
+func firstTradeDate(symbol string, body []byte) (time.Time, error) {
+	var data OHLCResponse
+	if err := json.Unmarshal(body, &data); err != nil {
+		log.Warn().Err(err).Str("symbol", symbol).Msg("yahoo listing date response couldn't be read")
+		return time.Time{}, fmt.Errorf("yahoo listing date for %s couldn't be read", symbol)
+	}
+	if data.Chart.Error.Code != "" {
+		log.Warn().Str("symbol", symbol).Str("code", data.Chart.Error.Code).
+			Str("description", data.Chart.Error.Description).
+			Msg("yahoo listing date response couldn't be read")
+		return time.Time{}, fmt.Errorf("yahoo listing date for %s couldn't be read", symbol)
+	}
+	if len(data.Chart.Result) == 0 || data.Chart.Result[0].Meta.FirstTradeDate == nil {
+		return time.Time{}, fmt.Errorf("yahoo did not say when %s was listed", symbol)
+	}
+	return unixTradeDate(*data.Chart.Result[0].Meta.FirstTradeDate), nil
+}
+
+// unixTradeDate is the New York calendar date of a Yahoo firstTradeDate.
+func unixTradeDate(unix int64) time.Time {
+	if unix > 1_000_000_000_000 {
+		unix /= 1000
+	}
+	local := time.Unix(unix, 0).In(xnysZone)
+	year, month, day := local.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 }
 
 // requestURL adds params (already encoded "k=v" pairs) and the crumb to the
@@ -441,8 +566,9 @@ type OHLCResponse struct {
 	Chart struct {
 		Result []struct {
 			Meta struct {
-				Currency string `json:"currency"`
-				Symbol   string `json:"symbol"`
+				Currency       string `json:"currency"`
+				Symbol         string `json:"symbol"`
+				FirstTradeDate *int64 `json:"firstTradeDate"`
 			} `json:"meta"`
 			Timestamp  []int64 `json:"timestamp"`
 			Indicators struct {
