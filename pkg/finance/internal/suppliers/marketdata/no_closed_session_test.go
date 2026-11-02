@@ -20,3 +20,15 @@ func TestNoClosedSessionReason(t *testing.T) {
 		"(sessions count as closed at 16:30 New York time)",
 		marketdata.NoClosedSessionReason(day.AddDate(0, 0, -1), day.AddDate(0, 0, 2)))
 }
+
+// The notice names the left-out session in the agreed words, and a run of
+// sessions as a range, with the same closing time as the reason above.
+func TestUnclosedSessionsNotice(t *testing.T) {
+	t.Parallel()
+	friday := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
+	require.Equal(t, "2026-10-30 isn't included because its trading session hasn't closed yet "+
+		"(sessions count as closed at 16:30 New York time).", marketdata.UnclosedSessionsNotice(friday, friday))
+	require.Equal(t, "2026-10-28 to 2026-10-30 aren't included because their trading sessions haven't "+
+		"closed yet (sessions count as closed at 16:30 New York time).",
+		marketdata.UnclosedSessionsNotice(friday.AddDate(0, 0, -2), friday))
+}
