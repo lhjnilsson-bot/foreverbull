@@ -6,24 +6,71 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
+
+	"github.com/lhjnilsson/foreverbull/internal/usercopy"
 )
 
 type snapshotCache interface {
 	load(etf string, asOf time.Time) ([]byte, bool, error)
 	store(etf string, asOf time.Time, body []byte) error
-	list(etf string, start, end time.Time) []time.Time
+	list(etf string, start, end time.Time) ([]time.Time, error)
+	// folder is where the cache keeps etf's files, for the user's sentence.
+	folder(etf string) string
+}
+
+// SnapshotCacheError is a read or write of the ETF holdings cache that
+// failed. Its text is the user's sentence with a plain cause; Err keeps the
+// file system error for the log.
+type SnapshotCacheError struct {
+	Dir   string
+	Write bool
+	Err   error
+}
+
+func (e *SnapshotCacheError) Error() string {
+	if e.Write {
+		return usercopy.SnapshotCacheWriteFailed(e.Dir, plainCacheCause(e.Err, true))
+	}
+	return usercopy.SnapshotCacheReadFailed(e.Dir, plainCacheCause(e.Err, false))
+}
+
+func (e *SnapshotCacheError) Unwrap() error { return e.Err }
+
+// plainCacheCause says in plain words why the cache folder failed.
+func plainCacheCause(err error, write bool) string {
+	switch {
+	case errors.Is(err, fs.ErrPermission) && write:
+		return "foreverbull isn't allowed to write there"
+	case errors.Is(err, fs.ErrPermission):
+		return "foreverbull isn't allowed to read it"
+	case errors.Is(err, syscall.ENOSPC):
+		return "the disk is full"
+	case write:
+		return "the file couldn't be written"
+	default:
+		return "the folder couldn't be read"
+	}
 }
 
 type fsSnapshotCache struct {
 	dir string
+}
+
+func (c *fsSnapshotCache) folder(etf string) string {
+	if c == nil {
+		return ""
+	}
+	return filepath.Join(c.dir, etfCacheSlug(etf))
 }
 
 func (c *fsSnapshotCache) path(etf string, asOf time.Time) string {
@@ -55,13 +102,21 @@ func (c *fsSnapshotCache) store(etf string, asOf time.Time, body []byte) error {
 	return os.WriteFile(path, body, 0o644)
 }
 
-func (c *fsSnapshotCache) list(etf string, start, end time.Time) []time.Time {
+// list returns the cached as-of dates in [start, end]. A missing ETF
+// directory is an empty cache. Any other read error is returned: the cached
+// dates join the sampled ones, so a dropped list would change the universe.
+// A file whose name isn't YYYYMMDD.json was not written here and is no as-of.
+func (c *fsSnapshotCache) list(etf string, start, end time.Time) ([]time.Time, error) {
 	if c == nil || c.dir == "" {
-		return nil
+		return nil, nil
 	}
-	entries, err := os.ReadDir(filepath.Join(c.dir, etfCacheSlug(etf)))
+	dir := filepath.Join(c.dir, etfCacheSlug(etf))
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	start = dateOnly(start)
 	end = dateOnly(end)
@@ -84,7 +139,7 @@ func (c *fsSnapshotCache) list(etf string, start, end time.Time) []time.Time {
 		}
 		dates = append(dates, asOf)
 	}
-	return dates
+	return dates, nil
 }
 
 func etfCacheSlug(etf string) string {
@@ -413,14 +468,21 @@ func (e *ISharesETFLoopup) loadCached(etf string, asOf time.Time) ([]byte, bool,
 	if e.cache == nil {
 		return nil, false, nil
 	}
-	return e.cache.load(etf, asOf)
+	body, ok, err := e.cache.load(etf, asOf)
+	if err != nil {
+		return nil, false, &SnapshotCacheError{Dir: e.cache.folder(etf), Err: err}
+	}
+	return body, ok, nil
 }
 
 func (e *ISharesETFLoopup) storeCached(etf string, asOf time.Time, body []byte) error {
 	if e.cache == nil {
 		return nil
 	}
-	return e.cache.store(etf, asOf, body)
+	if err := e.cache.store(etf, asOf, body); err != nil {
+		return &SnapshotCacheError{Dir: e.cache.folder(etf), Write: true, Err: err}
+	}
+	return nil
 }
 
 // GetSnapshot returns Equity holdings (with ISIN) for etf as of asOf.
@@ -456,7 +518,9 @@ func (e *ISharesETFLoopup) GetSnapshot(etf string, asOf time.Time) ([]Asset, err
 					return nil, err
 				}
 				if published {
-					_ = e.storeCached(etf, asOf, body)
+					if err := e.storeCached(etf, asOf, body); err != nil {
+						return nil, err
+					}
 					return assets, nil
 				}
 			}
@@ -641,7 +705,11 @@ func (e *ISharesETFLoopup) ListSnapshotDates(etf string, start, end time.Time) (
 	}
 	var cached []time.Time
 	if e.cache != nil {
-		cached = e.cache.list(etf, start, end)
+		var err error
+		cached, err = e.cache.list(etf, start, end)
+		if err != nil {
+			return nil, &SnapshotCacheError{Dir: e.cache.folder(etf), Err: err}
+		}
 	}
 	return mergeDates(monthEndDates(start, end), cached), nil
 }

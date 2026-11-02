@@ -273,6 +273,13 @@ func pythonRepr(s string) string {
 
 func loadETFSnapshots(scraper dependency.ETFScraper, etf string, start, end time.Time) ([]universe.Snapshot, error) {
 	listings, err := dependency.LoadSnapshotWindow(scraper, etf, start, end)
+	var cacheErr *dependency.SnapshotCacheError
+	if errors.As(err, &cacheErr) {
+		// The user's sentence names the folder and a plain cause; the
+		// whole chain goes to the log.
+		log.Error().Err(err).Str("etf", etf).Msg("error using the ETF snapshot cache")
+		return nil, cacheErr
+	}
 	if err != nil {
 		return nil, err
 	}
