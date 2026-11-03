@@ -759,6 +759,10 @@ func DownloadFinancialData(ctx context.Context, msg stream.Message) error {
 	// Symbols the provider answered with an HTTP error status. Every one is
 	// collected, then create fails once and names each cause.
 	var downloads []downloadMiss
+	// Symbols whose bars came from a later ticker of the same ISIN. They are
+	// stored on the backtest once the check passes, so create and the run
+	// summary can name them.
+	resolutions := make([]repository.TickerResolution, 0)
 	for {
 		msg, err := rsp.Recv()
 		if err != nil {
@@ -798,6 +802,13 @@ func DownloadFinancialData(ctx context.Context, msg stream.Message) error {
 			return discardSymbolDownloadError(ctx, backtests, command.BacktestName, backtestID,
 				provider, msg.Symbol, startDate, endDate, msg.GetError())
 		}
+		resolution, resolved, err := laterTickerResolution(msg)
+		if err != nil {
+			return discardUnrecordedResolutions(ctx, backtests, command.BacktestName, backtestID, err)
+		}
+		if resolved {
+			resolutions = append(resolutions, resolution)
+		}
 		progress.symbolDone()
 	}
 
@@ -805,6 +816,12 @@ func DownloadFinancialData(ctx context.Context, msg stream.Message) error {
 		strings.ToLower(provider), b.GetProfile(), symbols, reported, period, downloads)
 	if err != nil {
 		return err
+	}
+	if len(resolutions) > 0 {
+		err := saveTickerResolutions(ctx, backtests, command.BacktestName, backtestID, resolutions)
+		if err != nil {
+			return discardUnrecordedResolutions(ctx, backtests, command.BacktestName, backtestID, err)
+		}
 	}
 	if len(period.notices) > 0 {
 		// The backtest is kept. The notice rides on the completed
