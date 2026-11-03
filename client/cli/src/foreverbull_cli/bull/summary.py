@@ -1,5 +1,6 @@
 import re
 
+from collections.abc import Sequence
 from typing import Literal
 
 from rich.markup import escape
@@ -9,6 +10,8 @@ from rich.table import Table
 from foreverbull.pb.foreverbull.backtest.v1 import execution_pb
 from foreverbull_cli.output import console
 from foreverbull_cli.output import execution_link
+from foreverbull_cli.usercopy import LaterTicker
+from foreverbull_cli.usercopy import later_ticker_lines
 
 
 # The broker stores one complete line per last-price date in
@@ -210,6 +213,7 @@ def print_run_summary(
     execution_id: str,
     periods: list[execution_pb.Period],
     notices: list[str] | None = None,
+    resolutions: Sequence[LaterTicker] = (),
     verbose: bool = False,
 ) -> None:
     if not periods:
@@ -233,6 +237,13 @@ def print_run_summary(
                 highlight=False,
             )
             console.print()
+    resolved = later_ticker_lines(resolutions)
+    if resolved:
+        # Symbols create read under a later ticker of the same ISIN, so the
+        # run's prices for them came from that ticker.
+        for line in resolved:
+            console.print(f"  {line}", markup=False, highlight=False, soft_wrap=True)
+        console.print()
     if notices:
         # The broker left these members out of the run, e.g. after a delisting.
         # Never silent: the lines name the symbols and the date their prices
