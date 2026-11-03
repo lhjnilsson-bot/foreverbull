@@ -2491,3 +2491,133 @@ def test_backtest_create_time_limit_prints_exact_copy_and_exits_1(monkeypatch, c
     mock_delete.assert_not_called()
     assert result.exit_code == 1
     assert result.output == f"Using provider: alpaca (from --provider)\n✖ {copy}\n"
+
+
+# The exact later-ticker lines create and the run summary print.
+_FB_FROM_META = "Prices for FB come from META, the company's later ticker."
+_TWTR_FROM_X = "Prices for TWTR come from X, the company's later ticker."
+_ONE_MORE = "Plus 1 more symbol whose prices come from a later ticker."
+_TWO_MORE = "Plus 2 more symbols whose prices come from a later ticker."
+_FIRST_FIVE = [f"Prices for S{i} come from T{i}, the company's later ticker." for i in range(5)]
+
+
+def _resolutions(*resolutions: tuple[str, str]) -> list[backtest_pb.Backtest.TickerResolution]:
+    return [backtest_pb.Backtest.TickerResolution(symbol=symbol, read_as=read_as) for symbol, read_as in resolutions]
+
+
+def _many(count: int) -> list[tuple[str, str]]:
+    return [(f"S{i}", f"T{i}") for i in range(count)]
+
+
+def _resolved_backtest(*resolutions: tuple[str, str]) -> backtest_pb.Backtest:
+    entity = _sample_backtest(name="from_file", benchmark="QQQ")
+    entity.ticker_resolutions.extend(_resolutions(*resolutions))
+    return entity
+
+
+def _create_returning(monkeypatch, created: backtest_pb.Backtest):
+    monkeypatch.setenv("TTY_COMPATIBLE", "0")
+    monkeypatch.setenv("LOGGING_LEVEL", "ERROR")
+    stream = [
+        backtest_service_pb.CreateBacktestResponse(
+            CREATING=common_pb.Step(state=common_pb.State.COMPLETED),
+            DOWNLOADING=common_pb.Step(state=common_pb.State.COMPLETED),
+            INGESTING=common_pb.Step(state=common_pb.State.COMPLETED),
+            STORING=common_pb.Step(state=common_pb.State.COMPLETED),
+            backtest=created,
+        )
+    ]
+    with patch("foreverbull.broker.backtest.create", return_value=iter(stream)):
+        return _create_from_file()
+
+
+def _later_ticker_lines(output: str, prefix: str = "") -> list[str]:
+    return [
+        line[len(prefix) :]
+        for line in output.splitlines()
+        if line.startswith(prefix) and ("come from" in line or "later ticker" in line)
+    ]
+
+
+@pytest.mark.parametrize(
+    "resolved,expected",
+    [
+        ([("FB", "META")], [_FB_FROM_META]),
+        ([("FB", "META"), ("TWTR", "X")], [_FB_FROM_META, _TWTR_FROM_X]),
+    ],
+    ids=["one", "two"],
+)
+def test_backtest_create_names_a_symbol_read_under_a_later_ticker(monkeypatch, resolved, expected):
+    """Each stored resolution is a plain line, not a ⚠ notice, before the created backtest."""
+    result = _create_returning(monkeypatch, _resolved_backtest(*resolved))
+
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    assert _later_ticker_lines(result.output) == expected
+    assert all(line in lines for line in expected), "each line is printed whole, unindented"
+    assert "⚠" not in result.output
+    created_row = next(index for index, line in enumerate(lines) if "Created Backtest" in line)
+    assert lines.index(expected[-1]) < created_row
+
+
+@pytest.mark.parametrize(
+    "count,expected",
+    [(6, [*_FIRST_FIVE, _ONE_MORE]), (7, [*_FIRST_FIVE, _TWO_MORE])],
+    ids=["one more", "two more"],
+)
+def test_backtest_create_names_five_later_tickers_then_counts_the_rest(monkeypatch, count, expected):
+    result = _create_returning(monkeypatch, _resolved_backtest(*_many(count)))
+
+    assert result.exit_code == 0
+    assert _later_ticker_lines(result.output) == expected
+
+
+def test_backtest_create_without_a_later_ticker_prints_no_line(monkeypatch):
+    result = _create_returning(monkeypatch, _resolved_backtest())
+
+    assert result.exit_code == 0
+    assert _later_ticker_lines(result.output) == []
+
+
+def _run_summary(runner, monkeypatch, *resolved: tuple[str, str]):
+    monkeypatch.delenv("LOGGING_LEVEL", raising=False)
+    entity = _sample_backtest()
+    entity.ticker_resolutions.extend(_resolutions(*resolved))
+    result, _ = _invoke_run(runner, _run_session_mocks(), [_final_period()], backtest_entity=entity)
+    assert result.exit_code == 0
+    return result.stdout
+
+
+@pytest.mark.parametrize(
+    "resolved,expected",
+    [
+        ([("FB", "META")], [_FB_FROM_META]),
+        ([("FB", "META"), ("TWTR", "X")], [_FB_FROM_META, _TWTR_FROM_X]),
+    ],
+    ids=["one", "two"],
+)
+def test_backtest_run_summary_names_a_symbol_read_under_a_later_ticker(runner, monkeypatch, resolved, expected):
+    stdout = _run_summary(runner, monkeypatch, *resolved)
+
+    assert _later_ticker_lines(stdout, "  ") == expected
+    assert all(f"  {line}" in stdout.splitlines() for line in expected), "indented two spaces"
+    assert "⚠" not in stdout
+    assert stdout.index("Active days") < stdout.index(expected[0]) < stdout.index("Details:")
+
+
+@pytest.mark.parametrize(
+    "count,expected",
+    [(6, [*_FIRST_FIVE, _ONE_MORE]), (7, [*_FIRST_FIVE, _TWO_MORE])],
+    ids=["one more", "two more"],
+)
+def test_backtest_run_summary_names_five_later_tickers_then_counts_the_rest(runner, monkeypatch, count, expected):
+    stdout = _run_summary(runner, monkeypatch, *_many(count))
+
+    assert _later_ticker_lines(stdout, "  ") == expected
+
+
+def test_backtest_run_summary_without_a_later_ticker_prints_no_line(runner):
+    result, _ = _invoke_run(runner, _run_session_mocks(), [_final_period()])
+
+    assert result.exit_code == 0
+    assert _later_ticker_lines(result.stdout) == []

@@ -40,6 +40,8 @@ from foreverbull_cli.output import execution_link
 from foreverbull_cli.output import format_date_field
 from foreverbull_cli.output import format_optional_float
 from foreverbull_cli.output import format_proto_date
+from foreverbull_cli.usercopy import later_ticker_lines
+from foreverbull_cli.usercopy import later_tickers
 
 
 backtest = typer.Typer(help="Create and inspect backtests. `etfs` lists known iShares funds.")
@@ -594,6 +596,10 @@ def create(
     if created is None:
         return
 
+    # A plain line, not a ⚠ notice: the backtest is complete, and the line
+    # says which symbols it reads under a later ticker.
+    for line in later_ticker_lines(later_tickers(created)):
+        console.print(line, markup=False, highlight=False, soft_wrap=True)
     _print_backtest("Created Backtest", created)
 
 
@@ -830,6 +836,7 @@ def run(
         execution_id=execution_id,
         periods=list(periods),
         notices=list(stored.notices),
+        resolutions=later_tickers(entity),
         verbose=_verbose(),
     )
 
