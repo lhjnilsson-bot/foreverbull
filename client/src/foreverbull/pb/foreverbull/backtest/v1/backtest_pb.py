@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from ...common_pb import Date
 
 
-_BacktestFields: TypeAlias = Literal["name", "benchmark", "periods", "provider", "profile", "owner_login"]
+_BacktestFields: TypeAlias = Literal["name", "benchmark", "periods", "provider", "profile", "owner_login", "ticker_resolutions"]
 
 class Backtest(Message[_BacktestFields]):
     """
@@ -58,9 +58,17 @@ class Backtest(Message[_BacktestFields]):
             ```proto
             string owner_login = 9;
             ```
+        ticker_resolutions:
+            Server-filled by create, one per resolved symbol, ordered by symbol.
+            Empty when every symbol was read under its own ticker. A client value
+            is ignored.
+
+            ```proto
+            repeated foreverbull.backtest.v1.Backtest.TickerResolution ticker_resolutions = 10;
+            ```
     """
 
-    __slots__ = ("name", "benchmark", "periods", "provider", "profile", "owner_login")
+    __slots__ = ("name", "benchmark", "periods", "provider", "profile", "owner_login", "ticker_resolutions")
 
     if TYPE_CHECKING:
 
@@ -73,6 +81,7 @@ class Backtest(Message[_BacktestFields]):
             provider: str = "",
             profile: str = "",
             owner_login: str = "",
+            ticker_resolutions: list[Backtest.TickerResolution] | None = None,
         ) -> None:
             pass
 
@@ -82,6 +91,7 @@ class Backtest(Message[_BacktestFields]):
         provider: str
         profile: str
         owner_login: str
+        ticker_resolutions: list[Backtest.TickerResolution]
 
     _PeriodFields: TypeAlias = Literal["start_date", "end_date", "assets"]
 
@@ -157,9 +167,52 @@ class Backtest(Message[_BacktestFields]):
                 symbol: str
                 enabled: bool
 
+    _TickerResolutionFields: TypeAlias = Literal["symbol", "read_as"]
+
+    class TickerResolution(Message[_TickerResolutionFields]):
+        """
+        TickerResolution is a symbol whose bars create read under a later
+        ticker of the same ISIN, because the provider had none under the
+        symbol itself, such as FB read as META. It names no day: the provider
+        doesn't say when the ticker changed.
+
+        ```proto
+        message foreverbull.backtest.v1.Backtest.TickerResolution
+        ```
+
+        Attributes:
+            symbol:
+                symbol is the ticker the backtest asked for.
+
+                ```proto
+                string symbol = 1;
+                ```
+            read_as:
+                read_as is the later ticker the bars were read and stored under.
+
+                ```proto
+                string read_as = 2;
+                ```
+        """
+
+        __slots__ = ("symbol", "read_as")
+
+        if TYPE_CHECKING:
+
+            def __init__(
+                self,
+                *,
+                symbol: str = "",
+                read_as: str = "",
+            ) -> None:
+                pass
+
+            symbol: str
+            read_as: str
+
 
 _DESC = file_desc(
-    b'\n&foreverbull/backtest/v1/backtest.proto\x12\x17foreverbull.backtest.v1\x1a\x18foreverbull/common.proto"\xd3\x03\n\x08Backtest\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n\tbenchmark\x18\x05 \x01(\tR\tbenchmark\x12B\n\x07periods\x18\x06 \x03(\x0b2(.foreverbull.backtest.v1.Backtest.PeriodR\x07periods\x12\x1a\n\x08provider\x18\x07 \x01(\tR\x08provider\x12\x18\n\x07profile\x18\x08 \x01(\tR\x07profile\x12\x1f\n\x0bowner_login\x18\t \x01(\tR\nownerLogin\x1a\xf9\x01\n\x06Period\x127\n\nstart_date\x18\x01 \x01(\x0b2\x18.foreverbull.common.DateR\tstartDate\x123\n\x08end_date\x18\x02 \x01(\x0b2\x18.foreverbull.common.DateR\x07endDate\x12F\n\x06assets\x18\x03 \x03(\x0b2..foreverbull.backtest.v1.Backtest.Period.AssetR\x06assets\x1a9\n\x05Asset\x12\x16\n\x06symbol\x18\x01 \x01(\tR\x06symbol\x12\x18\n\x07enabled\x18\x02 \x01(\x08R\x07enabledB3Z1github.com/lhjnilsson/foreverbull/pkg/pb/backtestb\x06proto3',
+    b'\n&foreverbull/backtest/v1/backtest.proto\x12\x17foreverbull.backtest.v1\x1a\x18foreverbull/common.proto"\xfb\x04\n\x08Backtest\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n\tbenchmark\x18\x05 \x01(\tR\tbenchmark\x12B\n\x07periods\x18\x06 \x03(\x0b2(.foreverbull.backtest.v1.Backtest.PeriodR\x07periods\x12\x1a\n\x08provider\x18\x07 \x01(\tR\x08provider\x12\x18\n\x07profile\x18\x08 \x01(\tR\x07profile\x12\x1f\n\x0bowner_login\x18\t \x01(\tR\nownerLogin\x12a\n\x12ticker_resolutions\x18\n \x03(\x0b22.foreverbull.backtest.v1.Backtest.TickerResolutionR\x11tickerResolutions\x1a\xf9\x01\n\x06Period\x127\n\nstart_date\x18\x01 \x01(\x0b2\x18.foreverbull.common.DateR\tstartDate\x123\n\x08end_date\x18\x02 \x01(\x0b2\x18.foreverbull.common.DateR\x07endDate\x12F\n\x06assets\x18\x03 \x03(\x0b2..foreverbull.backtest.v1.Backtest.Period.AssetR\x06assets\x1a9\n\x05Asset\x12\x16\n\x06symbol\x18\x01 \x01(\tR\x06symbol\x12\x18\n\x07enabled\x18\x02 \x01(\x08R\x07enabled\x1aC\n\x10TickerResolution\x12\x16\n\x06symbol\x18\x01 \x01(\tR\x06symbol\x12\x17\n\x07read_as\x18\x02 \x01(\tR\x06readAsB3Z1github.com/lhjnilsson/foreverbull/pkg/pb/backtestb\x06proto3',
     [
         common_pb.desc(),
     ],
@@ -167,6 +220,7 @@ _DESC = file_desc(
         "Backtest": Backtest,
         "Backtest.Period": Backtest.Period,
         "Backtest.Period.Asset": Backtest.Period.Asset,
+        "Backtest.TickerResolution": Backtest.TickerResolution,
     },
 )
 

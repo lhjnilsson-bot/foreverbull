@@ -51,7 +51,7 @@ func (db *Backtest) ListVisible(ctx context.Context, caller auth.Account) ([]*ba
 func (db *Backtest) GetByID(ctx context.Context, id string) (*backtest.Backtest, error) {
 	rows, err := db.Conn.Query(ctx, `
 		SELECT b.name, b.benchmark, b.provider, b.profile,
-		       COALESCE(p.username, g.github_login, ''),
+		       COALESCE(p.username, g.github_login, ''), b.ticker_resolutions,
 		       bp.start_date, bp.end_date, bpa.symbol, bpa.enabled
 		FROM backtest AS b
 		LEFT JOIN account_password AS p ON p.account_id = b.owner_id
@@ -139,14 +139,22 @@ func scanOwnedBacktest(rows pgx.Rows) (*backtest.Backtest, error) {
 	item := &backtest.Backtest{}
 	for rows.Next() {
 		var (
-			start   *time.Time
-			end     *time.Time
-			symbol  *string
-			enabled *bool
+			resolved []byte
+			start    *time.Time
+			end      *time.Time
+			symbol   *string
+			enabled  *bool
 		)
-		err := rows.Scan(&item.Name, &item.Benchmark, &item.Provider, &item.Profile, &item.OwnerLogin, &start, &end, &symbol, &enabled)
+		first := item.Name == ""
+		err := rows.Scan(&item.Name, &item.Benchmark, &item.Provider, &item.Profile, &item.OwnerLogin, &resolved, &start, &end, &symbol, &enabled)
 		if err != nil {
 			return nil, fmt.Errorf("scan backtest: %w", err)
+		}
+		if first {
+			item.TickerResolutions, err = decodeTickerResolutions(resolved)
+			if err != nil {
+				return nil, fmt.Errorf("backtest %s: %w", item.Name, err)
+			}
 		}
 		if start == nil || end == nil {
 			continue
