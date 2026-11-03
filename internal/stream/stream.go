@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/lhjnilsson/foreverbull/internal/environment"
 	"github.com/lhjnilsson/foreverbull/internal/stream/pb"
@@ -38,14 +37,15 @@ const StreamName = "foreverbull"
 // message_states. Both read from the stream, so a task's states, from
 // PUBLISHED to its final state, must still be stored when they are read.
 // The longest task is a price download or ingest, bounded by
-// FINANCE_TASK_TIME_LIMIT (2h by default). 24h is twelve times that. It
-// covers a task that waits in the stream behind others before it starts,
-// and a broker that is down for most of a day before its consumers catch
-// up.
+// FINANCE_TASK_TIME_LIMIT: 2h by default, and the broker refuses to start
+// above environment.FinanceTaskTimeLimitMax (6h). 24h is twelve times the
+// default and four times the maximum. It also covers a task that waits in
+// the stream behind others before it starts, and a broker that is down for
+// most of a day before its consumers catch up.
 //
 // The stream has no per-subject message limit: WaitForCompletion reads the
 // whole state history of a task, not just its latest state.
-const MaxAge = 24 * time.Hour
+const MaxAge = environment.TaskProgressRetention
 
 // MaxBytes caps the foreverbull stream at 512 MiB, half of the chart's 1 GiB
 // NATS volume, so the rest stays free for consumer state and file store

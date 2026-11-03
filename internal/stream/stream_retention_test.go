@@ -59,8 +59,7 @@ func TestNewNATSStreamUpdatesAStreamWithAnotherConfig(t *testing.T) {
 }
 
 func TestStreamConfigKeepsMessagesPastTheLongestTask(t *testing.T) {
-	longest, err := time.ParseDuration(environment.FinanceTaskTimeLimitDefault)
-	require.NoError(t, err)
+	longest := environment.FinanceTaskTimeLimitMax
 
 	cfg := stream.StreamConfig()
 	require.Equal(t, stream.StreamName, cfg.Name)

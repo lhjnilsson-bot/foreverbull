@@ -391,6 +391,11 @@ func TestFinanceTaskTimeLimitDefaultsToTwoHours(t *testing.T) {
 	limit, err = GetFinanceTaskTimeLimit()
 	require.NoError(t, err)
 	require.Equal(t, 90*time.Minute, limit)
+
+	t.Setenv(FinanceTaskTimeLimit, "6h")
+	limit, err = GetFinanceTaskTimeLimit()
+	require.NoError(t, err)
+	require.Equal(t, FinanceTaskTimeLimitMax, limit)
 }
 
 // A bad limit fails at startup and names the variable.
@@ -400,8 +405,17 @@ func TestSetupRejectsAnInvalidFinanceTaskTimeLimit(t *testing.T) {
 		"two hours": `FINANCE_TASK_TIME_LIMIT="two hours" is not a duration; set it to a Go duration such as 2h or 90m`,
 		"0s":        `FINANCE_TASK_TIME_LIMIT="0s" must be above zero; set it to a Go duration such as 2h or 90m`,
 		"-1h":       `FINANCE_TASK_TIME_LIMIT="-1h" must be above zero; set it to a Go duration such as 2h or 90m`,
+		"6h1s":      `FINANCE_TASK_TIME_LIMIT="6h1s" is above the 6h maximum; foreverbull keeps a task's progress for 24h, so set it to 6h or less`,
+		"24h":       `FINANCE_TASK_TIME_LIMIT="24h" is above the 6h maximum; foreverbull keeps a task's progress for 24h, so set it to 6h or less`,
 	} {
 		t.Setenv(FinanceTaskTimeLimit, value)
 		require.EqualError(t, Setup(), want, value)
 	}
+}
+
+func TestDurationText(t *testing.T) {
+	require.Equal(t, "24h", durationText(24*time.Hour))
+	require.Equal(t, "6h", durationText(FinanceTaskTimeLimitMax))
+	require.Equal(t, "90m", durationText(90*time.Minute))
+	require.Equal(t, "1m30s", durationText(90*time.Second))
 }
