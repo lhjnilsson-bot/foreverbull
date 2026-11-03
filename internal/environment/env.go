@@ -503,9 +503,35 @@ func parsePort(name string) (int, error) {
 	return port, nil
 }
 
+// TaskProgressRetention is how long the foreverbull JetStream stream keeps a
+// message, and so a task's states (stream.MaxAge). It lives here so
+// FINANCE_TASK_TIME_LIMIT's error can name it without a dependency on the
+// stream package.
+const TaskProgressRetention = 24 * time.Hour
+
+// FinanceTaskTimeLimitMax is the longest FINANCE_TASK_TIME_LIMIT the broker
+// accepts. A task's states are read back from the foreverbull JetStream
+// stream, which keeps a message for TaskProgressRetention (24 hours), so a
+// task must end well inside that. 6 hours keeps a margin of four times the
+// longest task, and is three times the 2h default.
+const FinanceTaskTimeLimitMax = 6 * time.Hour
+
+// durationText writes d as a Go duration without zero units: 24h, 90m.
+func durationText(d time.Duration) string {
+	switch {
+	case d%time.Hour == 0:
+		return fmt.Sprintf("%dh", d/time.Hour)
+	case d%time.Minute == 0:
+		return fmt.Sprintf("%dm", d/time.Minute)
+	default:
+		return d.String()
+	}
+}
+
 // GetFinanceTaskTimeLimit reads FINANCE_TASK_TIME_LIMIT. Unset is the 2h
-// default. A value that is not a Go duration, or is 0 or negative, is an
-// error that names the variable, so it fails at startup.
+// default. A value that is not a Go duration, is 0 or negative, or is above
+// FinanceTaskTimeLimitMax is an error that names the variable, so it fails
+// at startup.
 func GetFinanceTaskTimeLimit() (time.Duration, error) {
 	value := strings.TrimSpace(os.Getenv(FinanceTaskTimeLimit))
 	if value == "" {
@@ -517,6 +543,11 @@ func GetFinanceTaskTimeLimit() (time.Duration, error) {
 	}
 	if limit <= 0 {
 		return 0, fmt.Errorf("%s=%q must be above zero; set it to a Go duration such as 2h or 90m", FinanceTaskTimeLimit, value)
+	}
+	if limit > FinanceTaskTimeLimitMax {
+		limitMax := durationText(FinanceTaskTimeLimitMax)
+		return 0, fmt.Errorf("%s=%q is above the %s maximum; foreverbull keeps a task's progress for %s, so set it to %s or less",
+			FinanceTaskTimeLimit, value, limitMax, durationText(TaskProgressRetention), limitMax)
 	}
 	return limit, nil
 }
