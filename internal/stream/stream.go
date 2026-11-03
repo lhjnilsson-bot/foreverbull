@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/lhjnilsson/foreverbull/internal/environment"
 	"github.com/lhjnilsson/foreverbull/internal/stream/pb"
@@ -30,11 +31,40 @@ const (
 // tasks, task states, aborts, and events on.
 const StreamName = "foreverbull"
 
+// MaxAge is how long the foreverbull stream keeps a message.
+//
+// WaitForCompletion follows a task on its state subject, and the
+// foreverbull-state-listener consumer copies every state into
+// message_states. Both read from the stream, so a task's states, from
+// PUBLISHED to its final state, must still be stored when they are read.
+// The longest task is a price download or ingest, bounded by
+// FINANCE_TASK_TIME_LIMIT (2h by default). 24h is twelve times that. It
+// covers a task that waits in the stream behind others before it starts,
+// and a broker that is down for most of a day before its consumers catch
+// up.
+//
+// The stream has no per-subject message limit: WaitForCompletion reads the
+// whole state history of a task, not just its latest state.
+const MaxAge = 24 * time.Hour
+
+// MaxBytes caps the foreverbull stream at 512 MiB, half of the chart's 1 GiB
+// NATS volume, so the rest stays free for consumer state and file store
+// overhead. Tasks, states, and events are small protobufs, so a day of
+// traffic is far below the cap.
+//
+// Discard is DiscardNew: a full stream refuses the publish and Publish
+// returns the error, rather than the server silently dropping the oldest
+// messages, which can be the states of a task that is still running.
+const MaxBytes int64 = 512 << 20
+
 // StreamConfig is the foreverbull stream's configuration.
 func StreamConfig() *nats.StreamConfig {
 	return &nats.StreamConfig{
 		Name:     StreamName,
 		Subjects: []string{"foreverbull.>"},
+		MaxAge:   MaxAge,
+		MaxBytes: MaxBytes,
+		Discard:  nats.DiscardNew,
 	}
 }
 
