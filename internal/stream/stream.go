@@ -8,6 +8,7 @@ import (
 	"github.com/lhjnilsson/foreverbull/internal/environment"
 	"github.com/lhjnilsson/foreverbull/internal/stream/pb"
 	"github.com/nats-io/nats.go"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -18,6 +19,11 @@ const (
 	// foreverbull.> subjects: progress is not stored on JetStream and gets
 	// no message_states row. A waiter that isn't listening misses it.
 	TOPIC_TASK_PROGRESS = "foreverbull-progress.%s.%s.%s.%s"
+	// TOPIC_TASK_UNRECORDED is core NATS, outside the foreverbull stream. A
+	// worker sends a task's state here when the stream refused it, for
+	// example because the stream is full, so the waiter and the state
+	// listener learn the task's outcome without the stream.
+	TOPIC_TASK_UNRECORDED = "foreverbull-unrecorded.%s.%s.%s.%s"
 )
 
 // StreamName is the shared JetStream stream every broker domain publishes
@@ -88,8 +94,25 @@ func NATSConnOptions() []nats.Option {
 	return []nats.Option{nats.UserInfo(user, environment.GetNATSPassword())}
 }
 
+// natsOptions is NATSConnOptions plus logAsyncError, for the broker's own
+// connections.
+func natsOptions() []nats.Option {
+	return append(NATSConnOptions(), nats.ErrorHandler(logAsyncError))
+}
+
+// logAsyncError logs an error NATS reports outside a call, such as a slow
+// consumer: a subscription whose pending messages hit their limit, after
+// which NATS drops new messages for it.
+func logAsyncError(_ *nats.Conn, sub *nats.Subscription, err error) {
+	event := log.Err(err)
+	if sub != nil {
+		event = event.Str("subject", sub.Subject)
+	}
+	event.Msg("nats dropped or failed a message")
+}
+
 func NewNATSStream() (Stream, error) {
-	natsConnect, err := nats.Connect(environment.GetNATSURL(), NATSConnOptions()...)
+	natsConnect, err := nats.Connect(environment.GetNATSURL(), natsOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to nats: %w", err)
 	}

@@ -47,6 +47,13 @@ func (s *NATSStream) runOrchestrationStep(ctx context.Context, step *pb.Orchestr
 	return notices, g.Wait()
 }
 
+// StepNotRecorded reports whether step failed because the stream was full
+// (ErrStateNotRecorded). A step carries its error as text, so the check is
+// on the sentinel's text, the same way commandError reads a task state.
+func StepNotRecorded(step *pb.Orchestration_Step) bool {
+	return step.GetState() == commonPb.State_STATE_FAILED && step.GetError() == ErrStateNotRecorded.Error()
+}
+
 func (s *NATSStream) RunOrchestration(ctx context.Context, o *pb.Orchestration) <-chan *pb.Orchestration_Step {
 	out := make(chan *pb.Orchestration_Step)
 

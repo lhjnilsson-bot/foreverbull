@@ -3,6 +3,7 @@ package stream_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/lhjnilsson/foreverbull/internal/stream"
@@ -228,4 +229,27 @@ func TestSessionLauncherServicesUnreachable(t *testing.T) {
 	require.EqualError(t, err, "Couldn't run backtest 'spy': foreverbull's services couldn't reach each other. "+
 		"Run `fbenv status` to check that the environment is running, then run "+
 		"`fbull strategy experiment mean-rev --backtest spy` again.")
+}
+
+// A session run on a full task queue fails with its own sentence, without the
+// ingest hint, which wouldn't help.
+func TestSessionLauncherQueueFull(t *testing.T) {
+	t.Parallel()
+
+	store := new(mockStore)
+	store.On("GetBacktest", mock.Anything, "spy").Return(&backtestpb.Backtest{
+		Name:    "spy",
+		Periods: []*backtestpb.Backtest_Period{spyPeriod()},
+	}, nil)
+	store.On("CreateSession", mock.Anything, "spy").Return(&backtestpb.Session{Id: "session-1"}, nil)
+	eventStream := new(stream.MockStream)
+	eventStream.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(fmt.Errorf("wait: %w", stream.ErrStateNotRecorded))
+
+	launcher := &ss.SessionLauncher{Store: store, Stream: eventStream}
+	_, err := launcher.Run(context.Background(), ss.RunInput{BacktestName: "spy", StrategyName: "mean-rev"})
+	require.EqualError(t, err, "Couldn't start a backtest session for strategy experiment 'mean-rev': "+
+		"foreverbull's task queue is full, so it couldn't record the task's progress. "+
+		"Old tasks leave the queue after 24 hours, so run the experiment again once they have. "+
+		"Restarting fbenv won't clear the queue.")
+	require.NotContains(t, err.Error(), "ingest it first")
 }
