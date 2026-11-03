@@ -127,6 +127,20 @@ is given does not answer. Outside the cluster, set `STORAGE_ENDPOINT`
 Persistence is cluster PVCs (`persistence.*`). Historical Docker host binds
 under `.foreverbull/{postgres,minio,nats}` are not used.
 
+The broker keeps the `foreverbull` JetStream stream at 24 hours and
+512 MiB and deletes `message_states` rows older than 24 hours (see
+[internal/stream/README.md](../internal/stream/README.md#retention)).
+Keep `persistence.nats.size` at the default 1Gi or more. With no
+`max_file_store` set, NATS sizes its JetStream store from the free space
+on the volume, and on a volume too small to reserve 512 MiB it refuses
+the stream and the broker doesn't start.
+
+On the first start after this upgrade the broker builds an index on
+`message_states` (`CREATE INDEX CONCURRENTLY`, which doesn't block writes).
+On a large table that build can outlast the broker's 120s `startupProbe`,
+which isn't a chart value; build the index before the upgrade (see
+[internal/stream/README.md](../internal/stream/README.md#retention)).
+
 ### Credentials
 
 Postgres and MinIO credentials live in Secret `foreverbull-credentials` (keys
