@@ -342,6 +342,10 @@ func (db *Instruments) ListAliases(ctx context.Context, isin string) ([]AliasInt
 // closing an open current alias at that day when needed. When later is already
 // stored for the ISIN, it is a no-op. Both writes run in one transaction, so a
 // failed insert doesn't leave the current alias closed with no later one.
+//
+// A later ticker the table still doesn't hold after the write is
+// ErrLaterAliasNotStored and rolls the transaction back, so a caller never
+// reports a resolution that wasn't stored.
 func (db *Instruments) EnsureLaterAlias(ctx context.Context, isin, current, later string, laterFrom time.Time) error {
 	conn, ok := db.Conn.(txBeginner)
 	if !ok {
@@ -349,8 +353,31 @@ func (db *Instruments) EnsureLaterAlias(ctx context.Context, isin, current, late
 	}
 	return pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
 		inTx := Instruments{Conn: tx}
-		return inTx.ensureLaterAlias(ctx, isin, current, later, laterFrom)
+		if err := inTx.ensureLaterAlias(ctx, isin, current, later, laterFrom); err != nil {
+			return err
+		}
+		return inTx.requireAlias(ctx, isin, later)
 	})
+}
+
+// ErrLaterAliasNotStored is returned when the later ticker is not in
+// asset_symbol after EnsureLaterAlias wrote it, such as when another ticker
+// of the ISIN already starts on that day.
+var ErrLaterAliasNotStored = errors.New("later ticker is not stored in asset_symbol")
+
+// requireAlias is ErrLaterAliasNotStored when isin has no alias for symbol.
+func (db *Instruments) requireAlias(ctx context.Context, isin, symbol string) error {
+	symbol = strings.TrimSpace(symbol)
+	aliases, err := db.ListAliases(ctx, isin)
+	if err != nil {
+		return err
+	}
+	for _, a := range aliases {
+		if a.Symbol == symbol {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s for %s: %w", symbol, normalizeISIN(isin), ErrLaterAliasNotStored)
 }
 
 // errInstrumentsNoTransaction is returned when the connection can't open a

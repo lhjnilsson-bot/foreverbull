@@ -197,7 +197,7 @@ class DownloadHistoricalDataRequest(Message[_DownloadHistoricalDataRequestFields
         provider: str
         profile: str
 
-_DownloadHistoricalDataResponseFields: TypeAlias = Literal["symbol", "status", "error", "provider_status"]
+_DownloadHistoricalDataResponseFields: TypeAlias = Literal["symbol", "status", "error", "provider_status", "later_ticker"]
 
 class DownloadHistoricalDataResponse(Message[_DownloadHistoricalDataResponseFields]):
     """
@@ -225,9 +225,16 @@ class DownloadHistoricalDataResponse(Message[_DownloadHistoricalDataResponseFiel
             ```proto
             optional foreverbull.finance.service.v1.DownloadHistoricalDataResponse.ProviderStatus provider_status = 4;
             ```
+        later_ticker:
+            later_ticker is set with STATUS_OK when the bars came from a later
+            ticker. It is unset when they came from symbol itself.
+
+            ```proto
+            optional foreverbull.finance.service.v1.DownloadHistoricalDataResponse.LaterTicker later_ticker = 5;
+            ```
     """
 
-    __slots__ = ("symbol", "status", "error", "provider_status")
+    __slots__ = ("symbol", "status", "error", "provider_status", "later_ticker")
 
     if TYPE_CHECKING:
 
@@ -238,6 +245,7 @@ class DownloadHistoricalDataResponse(Message[_DownloadHistoricalDataResponseFiel
             status: DownloadHistoricalDataResponse.Status | None = None,
             error: str = "",
             provider_status: DownloadHistoricalDataResponse.ProviderStatus | None = None,
+            later_ticker: DownloadHistoricalDataResponse.LaterTicker | None = None,
         ) -> None:
             pass
 
@@ -245,6 +253,7 @@ class DownloadHistoricalDataResponse(Message[_DownloadHistoricalDataResponseFiel
         status: DownloadHistoricalDataResponse.Status
         error: str
         provider_status: DownloadHistoricalDataResponse.ProviderStatus | None
+        later_ticker: DownloadHistoricalDataResponse.LaterTicker | None
 
     _ProviderStatusFields: TypeAlias = Literal["provider", "http_status"]
 
@@ -282,6 +291,40 @@ class DownloadHistoricalDataResponse(Message[_DownloadHistoricalDataResponseFiel
 
             provider: str
             http_status: int
+
+    _LaterTickerFields: TypeAlias = Literal["symbol"]
+
+    class LaterTicker(Message[_LaterTickerFields]):
+        """
+        LaterTicker is another ticker of the symbol's ISIN that held its bars
+        because the provider had none under symbol, such as FB read as META.
+        It names no day: the provider doesn't say when the ticker changed.
+
+        ```proto
+        message foreverbull.finance.service.v1.DownloadHistoricalDataResponse.LaterTicker
+        ```
+
+        Attributes:
+            symbol:
+                symbol is the ticker the bars were read and stored under.
+
+                ```proto
+                string symbol = 1;
+                ```
+        """
+
+        __slots__ = ("symbol",)
+
+        if TYPE_CHECKING:
+
+            def __init__(
+                self,
+                *,
+                symbol: str = "",
+            ) -> None:
+                pass
+
+            symbol: str
 
     class Status(Enum):
         """
@@ -397,7 +440,7 @@ class GetOHLCResponse(Message[_GetOHLCResponseFields]):
 
 
 _DESC = file_desc(
-    b'\n/foreverbull/finance/service/v1/marketdata.proto\x12\x1eforeverbull.finance.service.v1\x1a\x1bbuf/validate/validate.proto\x1a\x18foreverbull/common.proto\x1a\'foreverbull/finance/v1/marketdata.proto\x1a\x1fgoogle/protobuf/timestamp.proto"O\n\x0fGetAssetRequest\x12\x18\n\x06symbol\x18\x01 \x01(\tH\x00R\x06symbol\x12\x14\n\x04isin\x18\x02 \x01(\tH\x00R\x04isinB\x0c\n\nidentifier"G\n\x10GetAssetResponse\x123\n\x05asset\x18\x01 \x01(\x0b2\x1d.foreverbull.finance.v1.AssetR\x05asset"Q\n\x0fGetIndexRequest\x12>\n\x06symbol\x18\x01 \x01(\tR\x06symbolB&\xbaH#\xba\x01\x1d\n\x0fsymbol_required\x1a\nthis != \'\'\xc8\x01\x01"I\n\x10GetIndexResponse\x125\n\x06assets\x18\x01 \x03(\x0b2\x1d.foreverbull.finance.v1.AssetR\x06assets"\x91\x02\n\x1dDownloadHistoricalDataRequest\x12$\n\x07symbols\x18\x01 \x03(\tR\x07symbolsB\n\xbaH\x07\x92\x01\x04\x10\xa0\x9c\x01\x12_\n\nstart_date\x18\x02 \x01(\x0b2\x18.foreverbull.common.DateR\tstartDateB&\xbaH#\xba\x01\x1d\n\rdate_required\x1a\x0cthis != null\xc8\x01\x01\x123\n\x08end_date\x18\x03 \x01(\x0b2\x18.foreverbull.common.DateR\x07endDate\x12\x1a\n\x08provider\x18\x04 \x01(\tR\x08provider\x12\x18\n\x07profile\x18\x05 \x01(\tR\x07profile"\xb7\x03\n\x1eDownloadHistoricalDataResponse\x12\x16\n\x06symbol\x18\x01 \x01(\tR\x06symbol\x12]\n\x06status\x18\x02 \x01(\x0e2E.foreverbull.finance.service.v1.DownloadHistoricalDataResponse.StatusR\x06status\x12\x14\n\x05error\x18\x03 \x01(\tR\x05error\x12v\n\x0fprovider_status\x18\x04 \x01(\x0b2M.foreverbull.finance.service.v1.DownloadHistoricalDataResponse.ProviderStatusR\x0eproviderStatus\x1aM\n\x0eProviderStatus\x12\x1a\n\x08provider\x18\x01 \x01(\tR\x08provider\x12\x1f\n\x0bhttp_status\x18\x02 \x01(\x05R\nhttpStatus"A\n\x06Status\x12\x16\n\x12STATUS_UNSPECIFIED\x10\x00\x12\r\n\tSTATUS_OK\x10\x01\x12\x10\n\x0cSTATUS_ERROR\x10\x02"\xe3\x01\n\x0eGetOHLCRequest\x12E\n\x07symbols\x18\x01 \x03(\tR\x07symbolsB+\xbaH(\xba\x01"\n\x10symbols_required\x1a\x0esize(this) > 0\xc8\x01\x01\x12X\n\x05as_of\x18\x02 \x01(\x0b2\x1a.google.protobuf.TimestampR\x04asOfB\'\xbaH$\xba\x01\x1e\n\x0eas_of_required\x1a\x0cthis != null\xc8\x01\x01\x12\x1a\n\x08provider\x18\x03 \x01(\tR\x08provider\x12\x14\n\x05limit\x18\x04 \x01(\rR\x05limit"C\n\x0fGetOHLCResponse\x120\n\x04bars\x18\x01 \x03(\x0b2\x1c.foreverbull.finance.v1.OHLCR\x04bars2\xfa\x03\n\nMarketdata\x12o\n\x08GetAsset\x12/.foreverbull.finance.service.v1.GetAssetRequest\x1a0.foreverbull.finance.service.v1.GetAssetResponse"\x00\x12o\n\x08GetIndex\x12/.foreverbull.finance.service.v1.GetIndexRequest\x1a0.foreverbull.finance.service.v1.GetIndexResponse"\x00\x12\x9b\x01\n\x16DownloadHistoricalData\x12=.foreverbull.finance.service.v1.DownloadHistoricalDataRequest\x1a>.foreverbull.finance.service.v1.DownloadHistoricalDataResponse"\x000\x01\x12l\n\x07GetOHLC\x12..foreverbull.finance.service.v1.GetOHLCRequest\x1a/.foreverbull.finance.service.v1.GetOHLCResponse"\x00B:Z8github.com/lhjnilsson/foreverbull/pkg/pb/finance/serviceb\x06proto3',
+    b'\n/foreverbull/finance/service/v1/marketdata.proto\x12\x1eforeverbull.finance.service.v1\x1a\x1bbuf/validate/validate.proto\x1a\x18foreverbull/common.proto\x1a\'foreverbull/finance/v1/marketdata.proto\x1a\x1fgoogle/protobuf/timestamp.proto"O\n\x0fGetAssetRequest\x12\x18\n\x06symbol\x18\x01 \x01(\tH\x00R\x06symbol\x12\x14\n\x04isin\x18\x02 \x01(\tH\x00R\x04isinB\x0c\n\nidentifier"G\n\x10GetAssetResponse\x123\n\x05asset\x18\x01 \x01(\x0b2\x1d.foreverbull.finance.v1.AssetR\x05asset"Q\n\x0fGetIndexRequest\x12>\n\x06symbol\x18\x01 \x01(\tR\x06symbolB&\xbaH#\xba\x01\x1d\n\x0fsymbol_required\x1a\nthis != \'\'\xc8\x01\x01"I\n\x10GetIndexResponse\x125\n\x06assets\x18\x01 \x03(\x0b2\x1d.foreverbull.finance.v1.AssetR\x06assets"\x91\x02\n\x1dDownloadHistoricalDataRequest\x12$\n\x07symbols\x18\x01 \x03(\tR\x07symbolsB\n\xbaH\x07\x92\x01\x04\x10\xa0\x9c\x01\x12_\n\nstart_date\x18\x02 \x01(\x0b2\x18.foreverbull.common.DateR\tstartDateB&\xbaH#\xba\x01\x1d\n\rdate_required\x1a\x0cthis != null\xc8\x01\x01\x123\n\x08end_date\x18\x03 \x01(\x0b2\x18.foreverbull.common.DateR\x07endDate\x12\x1a\n\x08provider\x18\x04 \x01(\tR\x08provider\x12\x18\n\x07profile\x18\x05 \x01(\tR\x07profile"\xcd\x04\n\x1eDownloadHistoricalDataResponse\x12\x16\n\x06symbol\x18\x01 \x01(\tR\x06symbol\x12]\n\x06status\x18\x02 \x01(\x0e2E.foreverbull.finance.service.v1.DownloadHistoricalDataResponse.StatusR\x06status\x12\x14\n\x05error\x18\x03 \x01(\tR\x05error\x12v\n\x0fprovider_status\x18\x04 \x01(\x0b2M.foreverbull.finance.service.v1.DownloadHistoricalDataResponse.ProviderStatusR\x0eproviderStatus\x12m\n\x0clater_ticker\x18\x05 \x01(\x0b2J.foreverbull.finance.service.v1.DownloadHistoricalDataResponse.LaterTickerR\x0blaterTicker\x1aM\n\x0eProviderStatus\x12\x1a\n\x08provider\x18\x01 \x01(\tR\x08provider\x12\x1f\n\x0bhttp_status\x18\x02 \x01(\x05R\nhttpStatus\x1a%\n\x0bLaterTicker\x12\x16\n\x06symbol\x18\x01 \x01(\tR\x06symbol"A\n\x06Status\x12\x16\n\x12STATUS_UNSPECIFIED\x10\x00\x12\r\n\tSTATUS_OK\x10\x01\x12\x10\n\x0cSTATUS_ERROR\x10\x02"\xe3\x01\n\x0eGetOHLCRequest\x12E\n\x07symbols\x18\x01 \x03(\tR\x07symbolsB+\xbaH(\xba\x01"\n\x10symbols_required\x1a\x0esize(this) > 0\xc8\x01\x01\x12X\n\x05as_of\x18\x02 \x01(\x0b2\x1a.google.protobuf.TimestampR\x04asOfB\'\xbaH$\xba\x01\x1e\n\x0eas_of_required\x1a\x0cthis != null\xc8\x01\x01\x12\x1a\n\x08provider\x18\x03 \x01(\tR\x08provider\x12\x14\n\x05limit\x18\x04 \x01(\rR\x05limit"C\n\x0fGetOHLCResponse\x120\n\x04bars\x18\x01 \x03(\x0b2\x1c.foreverbull.finance.v1.OHLCR\x04bars2\xfa\x03\n\nMarketdata\x12o\n\x08GetAsset\x12/.foreverbull.finance.service.v1.GetAssetRequest\x1a0.foreverbull.finance.service.v1.GetAssetResponse"\x00\x12o\n\x08GetIndex\x12/.foreverbull.finance.service.v1.GetIndexRequest\x1a0.foreverbull.finance.service.v1.GetIndexResponse"\x00\x12\x9b\x01\n\x16DownloadHistoricalData\x12=.foreverbull.finance.service.v1.DownloadHistoricalDataRequest\x1a>.foreverbull.finance.service.v1.DownloadHistoricalDataResponse"\x000\x01\x12l\n\x07GetOHLC\x12..foreverbull.finance.service.v1.GetOHLCRequest\x1a/.foreverbull.finance.service.v1.GetOHLCResponse"\x00B:Z8github.com/lhjnilsson/foreverbull/pkg/pb/finance/serviceb\x06proto3',
     [
         validate_pb.desc(),
         common_pb.desc(),
@@ -412,6 +455,7 @@ _DESC = file_desc(
         "DownloadHistoricalDataRequest": DownloadHistoricalDataRequest,
         "DownloadHistoricalDataResponse": DownloadHistoricalDataResponse,
         "DownloadHistoricalDataResponse.ProviderStatus": DownloadHistoricalDataResponse.ProviderStatus,
+        "DownloadHistoricalDataResponse.LaterTicker": DownloadHistoricalDataResponse.LaterTicker,
         "DownloadHistoricalDataResponse.Status": DownloadHistoricalDataResponse.Status,
         "GetOHLCRequest": GetOHLCRequest,
         "GetOHLCResponse": GetOHLCResponse,

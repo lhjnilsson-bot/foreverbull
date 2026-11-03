@@ -506,6 +506,118 @@ func (suite *MarketdataTest) TestDownloadHistoricalDataUsesLaterTickerWhenAskedH
 	suite.Contains(symbols, "FB")
 }
 
+// The OK response for FB names the later ticker its bars were read under,
+// with no day: the provider doesn't say when FB became META.
+func (suite *MarketdataTest) TestDownloadHistoricalDataNamesTheLaterTicker() {
+	ctx := context.Background()
+	suite.fbRenamedToMeta(ctx)
+	suite.metaHasBars()
+
+	rsp := suite.downloadFB(ctx)
+	msg, err := rsp.Recv()
+	suite.Require().NoError(err)
+	suite.Equal("FB", msg.GetSymbol())
+	suite.Equal(servicePb.DownloadHistoricalDataResponse_STATUS_OK, msg.GetStatus())
+	suite.Require().NotNil(msg.GetLaterTicker())
+	suite.Equal("META", msg.GetLaterTicker().GetSymbol())
+	_, err = rsp.Recv()
+	suite.Require().ErrorIs(err, io.EOF)
+}
+
+// META is already stored, so nothing is written, and the response still
+// names it.
+func (suite *MarketdataTest) TestDownloadHistoricalDataNamesAStoredLaterTicker() {
+	ctx := context.Background()
+	instruments := repository.Instruments{Conn: suite.pgx}
+	_, err := instruments.Store(ctx, metaISIN, "Meta Platforms, Inc.")
+	suite.Require().NoError(err)
+	_, err = suite.pgx.Exec(ctx, `
+		INSERT INTO asset_symbol (isin, symbol, from_date, to_date)
+		VALUES ($1, 'FB', '2019-01-01'::date, '2022-06-09'::date),
+		       ($1, 'META', '2022-06-09'::date, NULL)`, metaISIN)
+	suite.Require().NoError(err)
+	suite.metaHasBars()
+
+	rsp := suite.downloadFB(ctx)
+	msg, err := rsp.Recv()
+	suite.Require().NoError(err)
+	suite.Equal(servicePb.DownloadHistoricalDataResponse_STATUS_OK, msg.GetStatus())
+	suite.Require().NotNil(msg.GetLaterTicker())
+	suite.Equal("META", msg.GetLaterTicker().GetSymbol())
+	aliases, err := instruments.ListAliases(ctx, metaISIN)
+	suite.Require().NoError(err)
+	suite.Len(aliases, 2)
+}
+
+// Bars read under the asked ticker carry no later ticker.
+func (suite *MarketdataTest) TestDownloadHistoricalDataSendsNoLaterTickerForTheAskedOne() {
+	ctx := context.Background()
+	suite.marketdata.On("GetAsset", mock.Anything, "META").Return(&pb.Asset{Symbol: "META", Name: "Meta Platforms, Inc.", ISIN: metaISIN}, nil)
+	suite.marketdata.On("GetOHLC", mock.Anything, "META", mock.Anything, mock.Anything).Return([]*pb.OHLC{
+		{Timestamp: timestamppb.New(mustTime("2019-06-03")), Open: 10, High: 11, Low: 9, Close: 10.5, Volume: 1000},
+	}, nil)
+
+	rsp, err := suite.client.DownloadHistoricalData(ctx, &servicePb.DownloadHistoricalDataRequest{
+		Symbols:   []string{"META"},
+		StartDate: &internal_pb.Date{Year: 2019, Month: 1, Day: 1},
+		EndDate:   &internal_pb.Date{Year: 2020, Month: 12, Day: 31},
+		Provider:  "yahoo",
+	})
+	suite.Require().NoError(err)
+	msg, err := rsp.Recv()
+	suite.Require().NoError(err)
+	suite.Equal(servicePb.DownloadHistoricalDataResponse_STATUS_OK, msg.GetStatus())
+	suite.Nil(msg.GetLaterTicker())
+}
+
+// Another ticker of the ISIN already starts on the day META would be written
+// from, so the insert stores nothing. The read-back finds no META, so FB
+// fails instead of reporting a later ticker that isn't recorded, and no META
+// bars are stored.
+func (suite *MarketdataTest) TestDownloadHistoricalDataFailsWhenTheLaterTickerIsNotStored() {
+	ctx := context.Background()
+	instruments := repository.Instruments{Conn: suite.pgx}
+	_, err := instruments.Store(ctx, metaISIN, "Facebook Inc")
+	suite.Require().NoError(err)
+	_, err = suite.pgx.Exec(ctx, `
+		INSERT INTO asset_symbol (isin, symbol, from_date, to_date)
+		VALUES ($1, 'FB', '2019-01-01'::date, '2021-01-01'::date),
+		       ($1, 'FBB', '2021-01-01'::date, NULL)`, metaISIN)
+	suite.Require().NoError(err)
+	suite.metaHasBars()
+	suite.marketdata.On("GetOHLC", mock.Anything, "FBB", mock.Anything, mock.Anything).Return(nil, yahooNotFound("FBB"))
+
+	rsp := suite.downloadFB(ctx)
+	msg, err := rsp.Recv()
+	suite.Require().NoError(err)
+	suite.requireOnlyText(msg, "FB", downloadFailedText("FB"))
+	suite.Nil(msg.GetLaterTicker())
+
+	var metaBars int
+	suite.Require().NoError(suite.pgx.QueryRow(ctx,
+		`SELECT count(*) FROM ohlc WHERE symbol='META'`).Scan(&metaBars))
+	suite.Zero(metaBars, "no META bars may be stored")
+	aliases, err := instruments.ListAliases(ctx, metaISIN)
+	suite.Require().NoError(err)
+	for _, a := range aliases {
+		suite.NotEqual("META", a.Symbol)
+	}
+}
+
+// metaHasBars mocks Yahoo with no bars under FB and one bar under META,
+// which a search by the ISIN finds.
+func (suite *MarketdataTest) metaHasBars() {
+	suite.marketdata.On("GetAsset", mock.Anything, "FB").Return(&pb.Asset{Symbol: "FB", Name: "Facebook"}, nil)
+	suite.marketdata.On("GetAsset", mock.Anything, "META").Return(&pb.Asset{Symbol: "META", Name: "Meta Platforms, Inc.", ISIN: metaISIN}, nil)
+	suite.marketdata.On("GetOHLC", mock.Anything, "FB", mock.Anything, mock.Anything).Return(nil, yahooNotFound("FB"))
+	suite.marketdata.On("GetOHLC", mock.Anything, "META", mock.Anything, mock.Anything).Return([]*pb.OHLC{
+		{Timestamp: timestamppb.New(mustTime("2019-06-03")), Open: 10, High: 11, Low: 9, Close: 10.5, Volume: 1000},
+	}, nil)
+	suite.marketdata.On("SearchAsset", mock.Anything, metaISIN).Return([]*pb.Asset{
+		{Symbol: "META", Name: "Meta Platforms, Inc.", ISIN: metaISIN},
+	}, nil)
+}
+
 func (suite *MarketdataTest) TestDownloadHistoricalDataFailsWhenNoTickerHasBars() {
 	ctx := context.Background()
 	instruments := repository.Instruments{Conn: suite.pgx}
