@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/lhjnilsson/foreverbull/internal/usercopy"
 	"github.com/lhjnilsson/foreverbull/pkg/backtest/internal/repository"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
@@ -190,29 +191,18 @@ func ingestFailureLead(failure ingestFailure) (string, string, string) {
 	}
 }
 
-// notSavedSentence says a failed create kept nothing. It is only true when
-// the backtest was removed.
-const notSavedSentence = "The backtest wasn't saved."
+// notSavedSentence, notRemovedSentence, deleteFirst, and savedAndNext live
+// in usercopy, so the API's sentence for a create that failed on a full task
+// queue reads the same.
+const (
+	notSavedSentence   = usercopy.BacktestNotSaved
+	notRemovedSentence = usercopy.BacktestNotRemoved
+)
 
-// notRemovedSentence replaces notSavedSentence when the backtest couldn't be
-// removed after a failed create.
-const notRemovedSentence = "The backtest was partly saved and couldn't be removed."
+func deleteFirst(name, next string) string { return usercopy.BacktestDeleteFirst(name, next) }
 
-// deleteFirst is the next step when the backtest couldn't be removed: its
-// own sentence to delete it first, then the step the failure gives when it
-// was removed, exactly as that step reads.
-func deleteFirst(name, next string) string {
-	return fmt.Sprintf("Run `fbull backtest delete %s` first. %s", name, next)
-}
-
-// savedAndNext is the saved sentence and the next step of a failed create:
-// notSavedSentence and next when the backtest was removed, otherwise
-// notRemovedSentence and next behind the delete-first step.
 func savedAndNext(name, next string, removed bool) (string, string) {
-	if removed {
-		return notSavedSentence, next
-	}
-	return notRemovedSentence, deleteFirst(name, next)
+	return usercopy.BacktestSavedAndNext(name, next, removed)
 }
 
 // ingestFailureMessage is the step's whole message: the data service's own
