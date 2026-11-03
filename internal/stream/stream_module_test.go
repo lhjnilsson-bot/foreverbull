@@ -20,6 +20,7 @@ import (
 type StreamModuleTest struct {
 	suite.Suite
 
+	conn       *pgxpool.Pool
 	repository *stream.Repository
 	jt         nats.JetStreamContext
 
@@ -36,6 +37,7 @@ func (test *StreamModuleTest) SetupSuite() {
 func (test *StreamModuleTest) SetupTest() {
 	conn, err := pgxpool.New(context.Background(), environment.GetPostgresURL())
 	test.Require().NoError(err)
+	test.conn = conn
 	test.repository = stream.NewRepository(conn)
 
 	natsConn, err := nats.Connect(environment.GetNATSURL())
@@ -45,10 +47,14 @@ func (test *StreamModuleTest) SetupTest() {
 	test.Require().NoError(err)
 	test.jt = jt
 
+	test.startApp()
+}
+
+func (test *StreamModuleTest) startApp() {
 	test.app = fx.New(
 		fx.Provide(
 			func() *pgxpool.Pool {
-				return conn
+				return test.conn
 			},
 		),
 		stream.Module,
@@ -86,4 +92,29 @@ func (test *StreamModuleTest) TestModule() {
 	test.Require().NotNil(msg)
 	test.Require().Len(states, 1)
 	test.Require().Equal(pb.State_STATE_CREATED, states[0].State)
+}
+
+func (test *StreamModuleTest) TestModulePrunesExpiredStatesAtStart() {
+	test.Require().NoError(test.app.Stop(context.Background()))
+
+	expired := time.Now().Add(-stream.StateRetention - time.Minute)
+	test.Require().NoError(test.repository.CreateMessageState(context.Background(), "expired", &pb.State{
+		State:      pb.State_STATE_COMPLETED,
+		OccurredAt: timestamppb.New(expired),
+	}))
+	test.Require().NoError(test.repository.CreateMessageState(context.Background(), "kept", &pb.State{
+		State:      pb.State_STATE_COMPLETED,
+		OccurredAt: timestamppb.Now(),
+	}))
+
+	test.startApp()
+	count := func(messageID string) int {
+		var n int
+		test.Require().NoError(test.conn.QueryRow(context.Background(),
+			`SELECT count(*) FROM message_states WHERE message_id=$1`, messageID).Scan(&n))
+		return n
+	}
+	test.Eventually(func() bool { return count("expired") == 0 },
+		5*time.Second, 50*time.Millisecond, "a row past the stream retention is pruned")
+	test.Equal(1, count("kept"))
 }
