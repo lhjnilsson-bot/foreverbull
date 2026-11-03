@@ -170,6 +170,10 @@ var Module = fx.Options(
 			}
 			return &stateSubscriber{repository: repo, jt: jt, nc: natsConn}, nil
 		},
+		// The state subscriber creates the tables the pruner deletes from.
+		func(_ *stateSubscriber, conn *pgxpool.Pool) *statePruner {
+			return newStatePruner(NewRepository(conn))
+		},
 	),
 	fx.Invoke(
 		func(lc fx.Lifecycle, sub *stateSubscriber) error {
@@ -184,6 +188,37 @@ var Module = fx.Options(
 				},
 			)
 			return nil
+		},
+		// A failed prune stops the broker: message_states would otherwise
+		// grow without anyone being told.
+		func(lc fx.Lifecycle, pruner *statePruner, shutdowner fx.Shutdowner) {
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			lc.Append(
+				fx.Hook{
+					OnStart: func(context.Context) error {
+						go func() {
+							defer close(done)
+							if err := pruner.run(ctx); err != nil {
+								log.Err(err).Msg("stopping the broker: message states can't be pruned")
+								if err := shutdowner.Shutdown(fx.ExitCode(1)); err != nil {
+									log.Err(err).Msg("error stopping the broker")
+								}
+							}
+						}()
+						return nil
+					},
+					OnStop: func(stopCtx context.Context) error {
+						cancel()
+						select {
+						case <-done:
+							return nil
+						case <-stopCtx.Done():
+							return fmt.Errorf("error stopping the message state pruner: %w", stopCtx.Err())
+						}
+					},
+				},
+			)
 		},
 	),
 )
