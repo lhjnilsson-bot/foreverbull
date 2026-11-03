@@ -28,4 +28,19 @@ message Backtest {
   string profile = 8;
   // Server-filled login of the owning account. A client value is ignored.
   string owner_login = 9;
+
+  // TickerResolution is a symbol whose bars create read under a later
+  // ticker of the same ISIN, because the provider had none under the
+  // symbol itself, such as FB read as META. It names no day: the provider
+  // doesn't say when the ticker changed.
+  message TickerResolution {
+    // symbol is the ticker the backtest asked for.
+    string symbol = 1;
+    // read_as is the later ticker the bars were read and stored under.
+    string read_as = 2;
+  }
+  // Server-filled by create, one per resolved symbol, ordered by symbol.
+  // Empty when every symbol was read under its own ticker. A client value
+  // is ignored.
+  repeated TickerResolution ticker_resolutions = 10;
 }

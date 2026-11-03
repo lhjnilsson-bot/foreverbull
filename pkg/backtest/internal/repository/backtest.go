@@ -142,6 +142,7 @@ func (db *Backtest) Get(ctx context.Context, name string) (*backtest.Backtest, e
 		Benchmark string
 		Provider  string
 		Profile   string
+		Resolved  []byte
 		StartDate *time.Time
 		EndDate   *time.Time
 		Symbol    *string
@@ -153,6 +154,7 @@ func (db *Backtest) Get(ctx context.Context, name string) (*backtest.Backtest, e
 			backtest.benchmark,
 			backtest.provider,
 			backtest.profile,
+			backtest.ticker_resolutions,
 			backtest_period.start_date,
 			backtest_period.end_date,
 			backtest_period_asset.symbol,
@@ -173,11 +175,17 @@ func (db *Backtest) Get(ctx context.Context, name string) (*backtest.Backtest, e
 
 	for rows.Next() {
 		var row rowData
-		err = rows.Scan(&row.Name, &row.Benchmark, &row.Provider, &row.Profile, &row.StartDate, &row.EndDate, &row.Symbol, &row.Enabled)
+		err = rows.Scan(&row.Name, &row.Benchmark, &row.Provider, &row.Profile, &row.Resolved, &row.StartDate, &row.EndDate, &row.Symbol, &row.Enabled)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan period: %w", err)
 		}
 
+		if b.Name == "" {
+			b.TickerResolutions, err = decodeTickerResolutions(row.Resolved)
+			if err != nil {
+				return nil, fmt.Errorf("backtest %s: %w", row.Name, err)
+			}
+		}
 		b.Name = row.Name
 		b.Benchmark = row.Benchmark
 		b.Provider = row.Provider
@@ -260,6 +268,7 @@ func (db *Backtest) List(ctx context.Context) ([]*backtest.Backtest, error) {
 		Benchmark string
 		Provider  string
 		Profile   string
+		Resolved  []byte
 		StartDate *time.Time
 		EndDate   *time.Time
 		Symbol    *string
@@ -271,6 +280,7 @@ func (db *Backtest) List(ctx context.Context) ([]*backtest.Backtest, error) {
 			backtest.benchmark,
 			backtest.provider,
 			backtest.profile,
+			backtest.ticker_resolutions,
 			backtest_period.start_date,
 			backtest_period.end_date,
 			backtest_period_asset.symbol,
@@ -288,7 +298,7 @@ func (db *Backtest) List(ctx context.Context) ([]*backtest.Backtest, error) {
 	backtests := make([]*backtest.Backtest, 0)
 	for rows.Next() {
 		var row rowData
-		err = rows.Scan(&row.Name, &row.Benchmark, &row.Provider, &row.Profile, &row.StartDate, &row.EndDate, &row.Symbol, &row.Enabled)
+		err = rows.Scan(&row.Name, &row.Benchmark, &row.Provider, &row.Profile, &row.Resolved, &row.StartDate, &row.EndDate, &row.Symbol, &row.Enabled)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan period: %w", err)
 		}
@@ -300,11 +310,16 @@ func (db *Backtest) List(ctx context.Context) ([]*backtest.Backtest, error) {
 			}
 		}
 		if b == nil {
+			resolved, err := decodeTickerResolutions(row.Resolved)
+			if err != nil {
+				return nil, fmt.Errorf("backtest %s: %w", row.Name, err)
+			}
 			b = &backtest.Backtest{
-				Name:      row.Name,
-				Benchmark: row.Benchmark,
-				Provider:  row.Provider,
-				Profile:   row.Profile,
+				Name:              row.Name,
+				Benchmark:         row.Benchmark,
+				Provider:          row.Provider,
+				Profile:           row.Profile,
+				TickerResolutions: resolved,
 			}
 			backtests = append(backtests, b)
 		}
