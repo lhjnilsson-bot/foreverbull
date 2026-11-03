@@ -72,6 +72,16 @@ message DownloadHistoricalDataResponse {
   // provider_status is set with STATUS_ERROR when the provider answered
   // with an error status. Callers name the cause from it, not from error.
   ProviderStatus provider_status = 4;
+  // LaterTicker is another ticker of the symbol's ISIN that held its bars
+  // because the provider had none under symbol, such as FB read as META.
+  // It names no day: the provider doesn't say when the ticker changed.
+  message LaterTicker {
+    // symbol is the ticker the bars were read and stored under.
+    string symbol = 1;
+  }
+  // later_ticker is set with STATUS_OK when the bars came from a later
+  // ticker. It is unset when they came from symbol itself.
+  LaterTicker later_ticker = 5;
 }
 
 // GetOHLC reads bars already stored in the broker database.

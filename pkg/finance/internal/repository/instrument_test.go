@@ -274,3 +274,42 @@ func (test *InstrumentTests) TestIngestAssetAndOHLCStillKeyedBySymbol() {
 	test.Require().NoError(err)
 	test.Equal(int64(1), n)
 }
+
+// EnsureLaterAlias writes META from laterFrom and closes FB there. A second
+// call finds META and writes nothing.
+func (test *InstrumentTests) TestEnsureLaterAliasWritesTheLaterTickerOnce() {
+	ctx := context.TODO()
+	_, err := test.instruments.Store(ctx, metaISIN, "Meta Platforms Inc")
+	test.Require().NoError(err)
+	test.storeSymbol(ctx, metaISIN, "FB", test.date(2019, 1, 1), time.Time{})
+
+	test.Require().NoError(test.instruments.EnsureLaterAlias(ctx, metaISIN, "FB", "META", test.date(2021, 1, 1)))
+	test.Require().NoError(test.instruments.EnsureLaterAlias(ctx, metaISIN, "FB", "META", test.date(2023, 1, 1)))
+
+	aliases, err := test.instruments.ListAliases(ctx, metaISIN)
+	test.Require().NoError(err)
+	to := test.date(2021, 1, 1)
+	test.Equal([]repository.AliasInterval{
+		{ISIN: metaISIN, Symbol: "FB", FromDate: test.date(2019, 1, 1), ToDate: &to},
+		{ISIN: metaISIN, Symbol: "META", FromDate: test.date(2021, 1, 1)},
+	}, aliases)
+}
+
+// Another ticker already starts on laterFrom, so the insert stores nothing.
+// EnsureLaterAlias fails and rolls back, so FB stays open.
+func (test *InstrumentTests) TestEnsureLaterAliasFailsWhenTheLaterTickerIsNotStored() {
+	ctx := context.TODO()
+	_, err := test.instruments.Store(ctx, metaISIN, "Meta Platforms Inc")
+	test.Require().NoError(err)
+	test.storeSymbol(ctx, metaISIN, "FB", test.date(2019, 1, 1), test.date(2021, 1, 1))
+	test.storeSymbol(ctx, metaISIN, "FBB", test.date(2021, 1, 1), time.Time{})
+
+	err = test.instruments.EnsureLaterAlias(ctx, metaISIN, "FBB", "META", test.date(2021, 1, 1))
+	test.Require().ErrorIs(err, repository.ErrLaterAliasNotStored)
+
+	aliases, err := test.instruments.ListAliases(ctx, metaISIN)
+	test.Require().NoError(err)
+	test.Require().Len(aliases, 2)
+	test.Equal("FBB", aliases[1].Symbol)
+	test.Nil(aliases[1].ToDate)
+}

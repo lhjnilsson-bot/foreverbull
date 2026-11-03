@@ -244,6 +244,12 @@ func noPriceDataError(symbol string) error {
 	return fmt.Errorf("%w for %s", errNoPriceData, symbol)
 }
 
+// sameTicker reports whether a and b name one ticker: the same stored name
+// (marketdata.StoredSymbol: BRK.B, BRK-B and BRKB are BRKB), in any case.
+func sameTicker(a, b string) bool {
+	return strings.EqualFold(marketdata.StoredSymbol(a), marketdata.StoredSymbol(b))
+}
+
 // noBarsAnswer reports whether a GetOHLC error is the provider saying it has
 // no bars for the ticker, as opposed to a failed request.
 func noBarsAnswer(err error) bool {
@@ -375,6 +381,15 @@ func (fs *MarketdataServer) downloadSymbol(
 	}
 
 	storeSymbol := asset.Symbol
+	// The provider may answer for another ticker than the one asked, such as
+	// a renamed company's current one (FB answered as META), and the bars are
+	// then fetched and stored under that ticker. It is named as a later
+	// ticker, so the bars are never read without a word. Another spelling of
+	// the asked ticker (aapl as AAPL, BRK-B for BRKB) is the asked ticker.
+	answeredAs := ""
+	if !sameTicker(asset.Symbol, symbol) {
+		answeredAs = asset.Symbol
+	}
 	// A provider that knows it would ask for nothing (Alpaca, when no
 	// completed session is in the range or its 15-minute cap on recent data
 	// empties it) answers with no bars that say nothing about the ticker.
@@ -395,11 +410,23 @@ func (fs *MarketdataServer) downloadSymbol(
 		failSymbol(ctx, sender, rsp, err)
 		return nil
 	}
+	if len(ohlcs) > 0 && answeredAs != "" {
+		rsp.LaterTicker = &servicePb.DownloadHistoricalDataResponse_LaterTicker{Symbol: answeredAs}
+	}
 	if len(ohlcs) == 0 {
 		// A download that already ended looks up no later ticker. Like the
 		// lookup's own ctx check below, the symbol is not reported; the
 		// download returns ctx.Err().
 		if ctx.Err() != nil {
+			return nil
+		}
+		// The provider named another ticker for the symbol and has no bars
+		// under it. Another later ticker would contradict the one it named,
+		// and a response names one, so the symbol fails instead of guessing.
+		if answeredAs != "" {
+			log.Warn().Str("symbol", symbol).Str("provider_symbol", answeredAs).
+				Msg("provider answered for another ticker that has no bars")
+			failSymbol(ctx, sender, rsp, noPriceDataError(symbol))
 			return nil
 		}
 		fetched, fetchErr := fs.fetchBarsViaLaterTicker(ctx, symbol, start, end, bars, assetRepo)
@@ -433,6 +460,10 @@ func (fs *MarketdataServer) downloadSymbol(
 		}
 		storeSymbol = fetched.symbol
 		ohlcs = fetched.bars
+		// The client records this on the backtest and shows it, so the
+		// later ticker is never used without a word. No day is sent: the
+		// provider doesn't say when the ticker changed.
+		rsp.LaterTicker = &servicePb.DownloadHistoricalDataResponse_LaterTicker{Symbol: fetched.symbol}
 	}
 
 	// The same overlap and re-scale rule as ingest, in one locked transaction
