@@ -100,8 +100,14 @@ func (bs *BacktestServer) CreateBacktest(req *servicePb.CreateBacktestRequest,
 		return fmt.Errorf("invalid create type")
 	}
 
+	backtests := repository.Backtest{Conn: bs.pgx}
+	queueFull, err := newQueueFullCreate(ctx, namedBacktest(backtests, createdName(req)))
+	if err != nil {
+		return err
+	}
 	steps := bs.stream.RunOrchestration(ctx, o)
 	for step := range steps {
+		queueFull.rewrite(ctx, step)
 		err = stream.UpdateOrchestration(rsp, step)
 		if err != nil {
 			return fmt.Errorf("error updating orchestration: %w", err)
@@ -111,7 +117,6 @@ func (bs *BacktestServer) CreateBacktest(req *servicePb.CreateBacktestRequest,
 			return fmt.Errorf("error sending response: %w", err)
 		}
 	}
-	backtests := repository.Backtest{Conn: bs.pgx}
 	return sendStoredBacktest(rsp, serverStream, createdName(req), func() (*backtest.Backtest, error) {
 		return backtests.Get(ctx, createdName(req))
 	})
@@ -351,6 +356,9 @@ func (bs *BacktestServer) GetExecution(ctx context.Context,
 func sessionRunError(backtest string, err error) error {
 	if errors.Is(err, stream.ErrServicesUnreachable) {
 		return status.Error(codes.Unavailable, usercopy.BacktestRunUnreachable(backtest, "fbull backtest run "+backtest))
+	}
+	if errors.Is(err, stream.ErrStateNotRecorded) {
+		return status.Error(codes.ResourceExhausted, usercopy.BacktestSessionQueueFull(backtest))
 	}
 	return fmt.Errorf("error publishing session run command: %w", err)
 }

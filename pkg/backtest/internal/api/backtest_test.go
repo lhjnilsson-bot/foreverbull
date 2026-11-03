@@ -8,6 +8,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lhjnilsson/foreverbull/internal/environment"
 	internalGrpc "github.com/lhjnilsson/foreverbull/internal/grpc"
@@ -534,5 +535,71 @@ func (test *BacktestServerTest) TestGetExecution() {
 			test.True(proto.Equal(want[i], resp.GetFunctions()[i]))
 		}
 		test.Equal("yahoo", resp.GetProvider())
+	})
+}
+
+// createStreamStoring runs a create whose orchestration stores the backtest
+// named name, as its CREATING step does, before it sends statuses.
+func (test *BacktestServerTest) createStreamStoring(name string, statuses []*streamPb.Orchestration_Step) []*servicePb.CreateBacktestResponse {
+	test.T().Helper()
+	statusCh := make(chan *streamPb.Orchestration_Step, len(statuses))
+	for _, status := range statuses {
+		statusCh <- status
+	}
+	close(statusCh)
+	test.stream.On("RunOrchestration", mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) { test.createBacktest(name) }).
+		Return((<-chan *streamPb.Orchestration_Step)(statusCh))
+
+	req := &servicePb.CreateBacktestRequest{
+		Create: &servicePb.CreateBacktestRequest_Backtest{
+			Backtest: &servicePb.CreateBacktestRequest_CreateFromBacktest{
+				Backtest: &backtest.Backtest{Name: name},
+			},
+		},
+	}
+	resp, err := test.client.CreateBacktest(context.TODO(), req)
+	test.Require().NoError(err)
+	responses := []*servicePb.CreateBacktestResponse{}
+	for {
+		msg, err := resp.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		test.Require().NoError(err)
+		responses = append(responses, msg)
+	}
+	return responses
+}
+
+func (test *BacktestServerTest) TestCreateBacktestOnAFullTaskQueue() {
+	cause := stream.ErrStateNotRecorded.Error()
+	wantSentence := func(name string) string {
+		return "Couldn't load data for backtest '" + name + "': foreverbull's task queue is full, so it couldn't record the task's progress. " +
+			"The backtest wasn't saved. Old tasks leave the queue after 24 hours, so run `fbull backtest create` again once they have. " +
+			"Restarting fbenv won't clear the queue."
+	}
+	backtests := repository.Backtest{Conn: test.pgx}
+	test.Run("removes the backtest this create stored", func() {
+		responses := test.createStreamStoring("queue-full", []*streamPb.Orchestration_Step{
+			{Num: 1, State: pb.State_STATE_COMPLETED},
+			{Num: 2, State: pb.State_STATE_FAILED, Error: &cause},
+		})
+		last := responses[len(responses)-1]
+		test.Equal(pb.State_STATE_FAILED, last.GetDOWNLOADING().GetState())
+		test.Equal(wantSentence("queue-full"), last.GetDOWNLOADING().GetMessage())
+		test.Nil(last.GetBacktest())
+		_, err := backtests.Get(context.TODO(), "queue-full")
+		test.Require().ErrorIs(err, pgx.ErrNoRows, "a failed create saves nothing")
+	})
+	test.Run("keeps a backtest that existed before", func() {
+		test.createBacktest("existing")
+		responses := test.createStream("existing", []*streamPb.Orchestration_Step{
+			{Num: 1, State: pb.State_STATE_FAILED, Error: &cause},
+		})
+		last := responses[len(responses)-1]
+		test.Equal(wantSentence("existing"), last.GetCREATING().GetMessage())
+		_, err := backtests.Get(context.TODO(), "existing")
+		test.Require().NoError(err, "another create's backtest is kept")
 	})
 }

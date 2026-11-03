@@ -88,8 +88,14 @@ func (bs *BacktestServer) createBacktestAuthed(req *servicePb.CreateBacktestRequ
 	if err != nil {
 		return err
 	}
+	backtests := repository.Backtest{Conn: bs.pgx}
+	queueFull, err := newQueueFullCreate(ctx, ownedBacktest(backtests, account.ID, createdName(req)))
+	if err != nil {
+		return err
+	}
 	steps := bs.stream.RunOrchestration(ctx, orchestration)
 	for step := range steps {
+		queueFull.rewrite(ctx, step)
 		if err := stream.UpdateOrchestration(rsp, step); err != nil {
 			return fmt.Errorf("error updating orchestration: %w", err)
 		}
@@ -97,7 +103,6 @@ func (bs *BacktestServer) createBacktestAuthed(req *servicePb.CreateBacktestRequ
 			return fmt.Errorf("error sending response: %w", err)
 		}
 	}
-	backtests := repository.Backtest{Conn: bs.pgx}
 	return sendStoredBacktest(rsp, serverStream, createdName(req), func() (*backtest.Backtest, error) {
 		id, err := backtests.IDByOwnerAndName(ctx, account.ID, createdName(req))
 		if err != nil {

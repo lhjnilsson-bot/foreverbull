@@ -244,6 +244,9 @@ func (l *SessionLauncher) publishSession(ctx context.Context, strategy, name, se
 		if errors.Is(err, stream.ErrServicesUnreachable) {
 			return errors.New(usercopy.BacktestRunUnreachable(name, l.retryCommand(strategy, name)))
 		}
+		if errors.Is(err, stream.ErrStateNotRecorded) {
+			return errors.New(usercopy.ExperimentQueueFull(strategy))
+		}
 		return fmt.Errorf("start backtest session for %q (ingest it first with `fbull backtest create`): %w", name, err)
 	}
 	return nil

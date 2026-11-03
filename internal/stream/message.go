@@ -98,6 +98,10 @@ func (m *message) taskProgressTopic() string {
 	return fmt.Sprintf(TOPIC_TASK_PROGRESS, m.msg.GetModule(), m.msg.GetComponent(), m.msg.GetMethod(), m.msg.GetId())
 }
 
+func (m *message) taskUnrecordedTopic() string {
+	return fmt.Sprintf(TOPIC_TASK_UNRECORDED, m.msg.GetModule(), m.msg.GetComponent(), m.msg.GetMethod(), m.msg.GetId())
+}
+
 func UpdateOrchestration(msg proto.Message, step *pb.Orchestration_Step) error {
 	reflectMsg := msg.ProtoReflect()
 	msgDesc := reflectMsg.Descriptor()
