@@ -38,7 +38,10 @@ type handlers struct {
 	db      postgres.Query
 	logf    LogFunc
 	limiter *failureLimiter
-	now     func() time.Time
+	// cliLimiter bounds code exchanges per address, cliAccountLimiter per account.
+	cliLimiter        *failureLimiter
+	cliAccountLimiter *failureLimiter
+	now               func() time.Time
 	// hashes bounds concurrent argon2id checks. Each one uses 64 MiB.
 	hashes chan struct{}
 }
@@ -58,6 +61,7 @@ func registerHTTP(mux *http.ServeMux, db postgres.Query, logf LogFunc) {
 	}
 	h := &handlers{
 		db: db, logf: logf, limiter: newFailureLimiter(), now: time.Now,
+		cliLimiter: newFailureLimiter(), cliAccountLimiter: newFailureLimiter(),
 		hashes: make(chan struct{}, loginHashCapacity()),
 	}
 	mux.HandleFunc("GET /api/auth/providers", h.providers)
@@ -69,6 +73,11 @@ func registerHTTP(mux *http.ServeMux, db postgres.Query, logf LogFunc) {
 	mux.HandleFunc("POST /api/auth/tokens", h.mintToken)
 	mux.HandleFunc("GET /api/auth/tokens", h.listTokens)
 	mux.HandleFunc("DELETE /api/auth/tokens/{id}", h.revokeToken)
+	mux.HandleFunc("GET /cli/authorize", h.cliAuthorizePage)
+	mux.HandleFunc("POST /cli/authorize", h.cliAuthorizeApprove)
+	mux.HandleFunc("POST /api/auth/cli/token", h.cliToken)
+	mux.HandleFunc("POST "+cliRevokePath, h.cliRevoke)
+	mux.HandleFunc("POST /api/auth/revoke-all", h.revokeAll)
 	mux.HandleFunc("PUT /api/services/grants", h.putServiceGrant)
 	mux.HandleFunc("GET /api/services/grants", h.listServiceGrants)
 	mux.HandleFunc("DELETE /api/services/grants", h.deleteServiceGrant)

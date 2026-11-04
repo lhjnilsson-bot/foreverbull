@@ -27,6 +27,10 @@ func Protect(db postgres.Query) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
+			if r.Method == http.MethodPost && r.URL.Path == cliRevokePath {
+				protectBearer(db, w, r, next)
+				return
+			}
 			account, err := AccountFromRequest(r.Context(), db, r, time.Now())
 			if errors.Is(err, ErrUnauthorized) {
 				ClearSessionCookie(w, r)
@@ -79,6 +83,9 @@ func anonymousRequest(r *http.Request) bool {
 		return true
 	case r.Method == http.MethodGet && path == "/api/auth/github/callback":
 		return true
+	case r.Method == http.MethodPost && path == "/api/auth/cli/token":
+		// The code and its verifier are the credential.
+		return true
 	case (r.Method == http.MethodGet || r.Method == http.MethodHead) && !underAPI(path):
 		return true
 	default:
@@ -89,6 +96,13 @@ func anonymousRequest(r *http.Request) bool {
 func anyRoleRequest(r *http.Request) bool {
 	path := r.URL.Path
 	if r.Method == http.MethodGet && path == "/api/auth/me" {
+		return true
+	}
+	if r.Method == http.MethodPost && path == "/cli/authorize" {
+		// A viewer may approve a read token. The handler refuses none and pending.
+		return true
+	}
+	if r.Method == http.MethodPost && path == "/api/auth/revoke-all" {
 		return true
 	}
 	return r.Method == http.MethodPost && path == "/api/auth/logout"
