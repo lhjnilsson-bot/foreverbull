@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from pandas import read_sql_query
+from sqlalchemy import bindparam
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from zipline.utils.calendar_utils import get_calendar
@@ -24,6 +25,19 @@ from foreverbull.broker.utils import describe_exception
 from foreverbull.models.finance import ohlc_provider
 from foreverbull.pb import pb_utils
 from foreverbull.pb.foreverbull.backtest.v1 import backtest_pb
+from foreverbull_zipline.data_bundles.dividends import CORPORATE_ACTION_COLUMNS
+from foreverbull_zipline.data_bundles.dividends import DIVIDEND_COLUMNS
+from foreverbull_zipline.data_bundles.dividends import BundleDividends
+from foreverbull_zipline.data_bundles.dividends import DividendProblem
+from foreverbull_zipline.data_bundles.dividends import SidBars
+from foreverbull_zipline.data_bundles.dividends import books_cash_dividends
+from foreverbull_zipline.data_bundles.dividends import build_bundle_dividends
+from foreverbull_zipline.data_bundles.dividends import corporate_action_problems
+from foreverbull_zipline.data_bundles.dividends import dividend_problems_line
+from foreverbull_zipline.data_bundles.dividends import empty_dividends
+from foreverbull_zipline.data_bundles.dividends import no_corporate_actions
+from foreverbull_zipline.data_bundles.dividends import stooq_cash_dividends_line
+from foreverbull_zipline.data_bundles.dividends import write_foreign_dividends
 from foreverbull_zipline.database import get_engine
 from foreverbull_zipline.errors import PlainSentence
 
@@ -329,6 +343,46 @@ class MissingSessionsError(ValueError):
         super().__init__(f"missing prices on trading days: {listed}")
 
 
+def dividends_unread_line(backtest: str) -> str:
+    """Ingest's failure when the stored dividends can't be read."""
+    return (
+        f"Couldn't load data for backtest '{backtest}': foreverbull couldn't read its stored dividends. "
+        "The backtest wasn't saved. "
+        "Run `fbenv status` to check that the environment is running, then run `fbull backtest create` again."
+    )
+
+
+def fetched_span_problems(
+    provider: str,
+    spans: dict[str, tuple[date, date]],
+    bar_spans: dict[str, tuple[date, date]],
+) -> list[DividendProblem]:
+    """Tickers whose stored bars have no dividend fetch covering them.
+
+    The broker records the span of bars whose dividends it fetched in the
+    same transaction as the bars, so a ticker outside it was stored before
+    dividends were fetched, and its dividends are unknown, not none.
+    """
+    problems: list[DividendProblem] = []
+    for symbol, (first, last) in bar_spans.items():
+        span = spans.get(symbol)
+        if span is None:
+            problems.append(DividendProblem(provider, symbol, None, "its dividends were never loaded", reload=True))
+            continue
+        if span[0] > first or span[1] < last:
+            problems.append(
+                DividendProblem(
+                    provider,
+                    symbol,
+                    None,
+                    f"its dividends were loaded for {span[0]:%Y-%m-%d} to {span[1]:%Y-%m-%d}, "
+                    f"not for its prices from {first:%Y-%m-%d} to {last:%Y-%m-%d}",
+                    reload=True,
+                )
+            )
+    return problems
+
+
 def ticker_on_day(group: InstrumentGroup, from_date: date, to_date: date, day: pd.Timestamp) -> str:
     """The ticker of the group whose dates hold day, else the last one."""
     windows = alias_windows(group.aliases, from_date, to_date)
@@ -387,11 +441,64 @@ class DatabaseEngine:
             self._engine,
             params={
                 "symbol": symbol,
-                "provider": self.provider or ohlc_provider(),
+                "provider": self.provider,
                 "from_date": _as_date(from_date),
                 "after_to_date": cast(date, _as_date(to_date)) + timedelta(days=1),
             },
         )
+
+    def get_dividends(self, symbols: list[str], from_date, to_date) -> pd.DataFrame:
+        """Stored dividends of the symbols with an ex-date from from_date to to_date."""
+        query = text(
+            """SELECT symbol, ex_date, pay_date, record_date, declared_date,
+                      amount::float8 AS amount, currency, is_foreign
+                 FROM dividend
+                WHERE provider = :provider AND symbol IN :symbols
+                  AND ex_date >= :from_date AND ex_date <= :to_date
+                ORDER BY symbol, ex_date"""
+        ).bindparams(bindparam("symbols", expanding=True))
+        return read_sql_query(
+            query,
+            self._engine,
+            params={
+                "provider": self.provider,
+                "symbols": symbols,
+                "from_date": _as_date(from_date),
+                "to_date": _as_date(to_date),
+            },
+        )
+
+    def get_corporate_actions(self, symbols: list[str], from_date, to_date) -> pd.DataFrame:
+        """Stored actions a backtest can't book, with an ex-date from from_date to to_date."""
+        query = text(
+            """SELECT symbol, kind, ex_date
+                 FROM corporate_action
+                WHERE provider = :provider AND symbol IN :symbols
+                  AND ex_date >= :from_date AND ex_date <= :to_date
+                ORDER BY ex_date, symbol, kind"""
+        ).bindparams(bindparam("symbols", expanding=True))
+        return read_sql_query(
+            query,
+            self._engine,
+            params={
+                "provider": self.provider,
+                "symbols": symbols,
+                "from_date": _as_date(from_date),
+                "to_date": _as_date(to_date),
+            },
+        )
+
+    def get_dividend_fetches(self, symbols: list[str]) -> dict[str, tuple[date, date]]:
+        """The span of stored bars whose dividends were fetched, per symbol."""
+        query = text(
+            """SELECT symbol, first_date, last_date FROM dividend_fetch
+                WHERE provider = :provider AND symbol IN :symbols"""
+        ).bindparams(bindparam("symbols", expanding=True))
+        frame = read_sql_query(query, self._engine, params={"provider": self.provider, "symbols": symbols})
+        return {
+            str(row.symbol): (cast(date, _as_date(row.first_date)), cast(date, _as_date(row.last_date)))
+            for row in cast(Iterable[Any], frame.itertuples(index=False))
+        }
 
 
 class SQLIngester:
@@ -406,6 +513,8 @@ class SQLIngester:
         engine=None,
         aliases: pd.DataFrame | None = None,
         events: pd.DataFrame | None = None,
+        dividends: pd.DataFrame | None = None,
+        corporate_actions: pd.DataFrame | None = None,
     ):
         self.backtest = backtest
         self.engine = engine or DatabaseEngine()
@@ -415,6 +524,13 @@ class SQLIngester:
         # None loads backtest_symbol_event. A frame, including an empty one,
         # is the caller's list and is not read from the database.
         self._events = events
+        # The same for dividends (DIVIDEND_COLUMNS). A caller's frame is the
+        # complete list; only a database read checks the fetched spans.
+        self._dividends = dividends
+        # And for corporate actions (CORPORATE_ACTION_COLUMNS). None with a
+        # caller's dividends is none.
+        self._corporate_actions = corporate_actions
+        self._bundle_dividends: BundleDividends = empty_dividends()
 
     def create_metadata(self) -> pd.DataFrame:
         return pd.DataFrame(
@@ -537,6 +653,9 @@ class SQLIngester:
             raise PlainSentence(no_stored_prices_line(self.backtest.name, empty, first, last, gaps))
         if gaps:
             raise MissingSessionsError(gaps)
+        # Dividends are checked before any bar is yielded, so a refused one
+        # writes nothing.
+        self._bundle_dividends = self.bundle_dividends(resolved, from_date, to_date, calendar, sessions)
         for index, (group, combined, mapping_rows) in enumerate(resolved):
             is_benchmark = all(alias.symbol == self.backtest.benchmark for alias in group.aliases)
             ends.append((index, _index_timestamp(combined.index, -1), group.member_to, is_benchmark, mapping_rows))
@@ -568,6 +687,103 @@ class SQLIngester:
                 )
                 self._df_metadata = pd.concat([self._df_metadata, asset_row], ignore_index=True)
 
+    def bundle_dividends(
+        self,
+        resolved: list[tuple[InstrumentGroup, pd.DataFrame, list[tuple[str, pd.Timestamp, pd.Timestamp]]]],
+        from_date: date,
+        to_date: date,
+        calendar,
+        sessions: pd.DatetimeIndex,
+    ) -> BundleDividends:
+        """Every sid's cash dividends, checked, or the error naming each refused one."""
+        provider = bundle_provider(self.backtest)
+        if not books_cash_dividends(provider):
+            # A stooq run books none: its bars already hold them. A caller
+            # that hands it dividends anyway is refused, not ignored.
+            for given in (self._dividends, self._corporate_actions):
+                if given is not None and not given.empty:
+                    raise PlainSentence(stooq_cash_dividends_line(self.backtest.name))
+            return empty_dividends()
+        if len(sessions) == 0:
+            return empty_dividends()
+        sids = [
+            SidBars(
+                sid=index,
+                symbols=tuple(dict.fromkeys(alias.symbol for alias in group.aliases)),
+                closes=cast(pd.Series, combined["close"]),
+            )
+            for index, (group, combined, _) in enumerate(resolved)
+        ]
+        bar_spans = {
+            symbol: (_index_timestamp(combined.index, 0).date(), _index_timestamp(combined.index, -1).date())
+            for _, combined, mapping_rows in resolved
+            for symbol, _, _ in mapping_rows
+        }
+        symbols = sorted({s for sid in sids for s in sid.symbols})
+        frame, problems = self.load_dividends(provider, symbols, bar_spans)
+        dividends, refused = build_bundle_dividends(provider, sids, frame, calendar)
+        problems.extend(refused)
+        actions = self.load_corporate_actions(symbols, from_date, to_date)
+        problems.extend(corporate_action_problems(provider, symbols, actions, from_date, to_date))
+        if problems:
+            raise PlainSentence(dividend_problems_line(self.backtest.name, problems))
+        return dividends
+
+    def load_dividends(
+        self,
+        provider: str,
+        symbols: list[str],
+        bar_spans: dict[str, tuple[date, date]],
+    ) -> tuple[pd.DataFrame, list[DividendProblem]]:
+        """The dividends of the symbols, and every ticker whose dividends weren't fetched.
+
+        A caller's frame is used as it is. Otherwise the broker's tables are
+        read; an engine that can't read them fails the ingest.
+        """
+        if not books_cash_dividends(provider):
+            raise PlainSentence(stooq_cash_dividends_line(self.backtest.name))
+        if self._dividends is not None:
+            return self._dividends, []
+        reader = self.engine
+        if not hasattr(reader, "get_dividends") or not hasattr(reader, "get_dividend_fetches"):
+            raise PlainSentence(dividends_unread_line(self.backtest.name))
+        first = min(span[0] for span in bar_spans.values())
+        last = max(span[1] for span in bar_spans.values())
+        try:
+            spans = reader.get_dividend_fetches(symbols)
+            frame = reader.get_dividends(symbols, first, last)
+        except SQLAlchemyError as exc:
+            _logger.error("Couldn't read the dividends of backtest %r: %s", self.backtest.name, describe_exception(exc))
+            raise PlainSentence(dividends_unread_line(self.backtest.name)) from None
+        if frame is None or any(column not in frame.columns for column in DIVIDEND_COLUMNS):
+            raise PlainSentence(dividends_unread_line(self.backtest.name))
+        return frame, fetched_span_problems(provider, spans, bar_spans)
+
+    def load_corporate_actions(self, symbols: list[str], from_date: date, to_date: date) -> pd.DataFrame:
+        """The stored actions a backtest can't book, in the window.
+
+        A caller's frame, or none when the caller gave its dividends, is used
+        as it is. Otherwise the broker's table is read; an engine that can't
+        read it fails the ingest.
+        """
+        if self._corporate_actions is not None:
+            return self._corporate_actions
+        if self._dividends is not None:
+            return no_corporate_actions()
+        reader = self.engine
+        if not hasattr(reader, "get_corporate_actions"):
+            raise PlainSentence(dividends_unread_line(self.backtest.name))
+        try:
+            frame = reader.get_corporate_actions(symbols, from_date, to_date)
+        except SQLAlchemyError as exc:
+            _logger.error(
+                "Couldn't read the corporate actions of backtest %r: %s", self.backtest.name, describe_exception(exc)
+            )
+            raise PlainSentence(dividends_unread_line(self.backtest.name)) from None
+        if frame is None or any(column not in frame.columns for column in CORPORATE_ACTION_COLUMNS):
+            raise PlainSentence(dividends_unread_line(self.backtest.name))
+        return frame
+
     def _bars(self, symbol: str, from_date: date, to_date: date) -> pd.DataFrame:
         data = self.get_stock_data(symbol, from_date, to_date)
         data.dropna(inplace=True)
@@ -590,4 +806,5 @@ class SQLIngester:
         self._df_metadata = self.create_metadata()
         daily_bar_writer.write(self.writer(show_progress, calendar), show_progress=show_progress)
         asset_db_writer.write(equities=self._df_metadata)
-        adjustment_writer.write()
+        adjustment_writer.write(dividends=self._bundle_dividends.frame)
+        write_foreign_dividends(adjustment_writer.conn, self._bundle_dividends.foreign)
