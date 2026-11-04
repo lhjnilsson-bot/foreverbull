@@ -33,3 +33,7 @@ remote:
   # Override at runtime with FOREVERBULL_BROKER_ADDRESS (highest priority).
   # Select cluster with: fbenv use local|remote
   broker_address: ""
+  # https:// origin of the broker's web UI, where `fbull login` signs in.
+  # Required for `fbull login` on remote. Local always uses http://localhost:8080.
+  # Override at runtime with FOREVERBULL_BROKER_URL.
+  broker_url: ""

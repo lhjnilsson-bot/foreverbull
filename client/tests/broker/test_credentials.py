@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from foreverbull.broker import credentials
+from foreverbull.broker.config import resolve_broker_url
 from foreverbull.broker.config import save_cluster_config
 from foreverbull.broker.credentials import InsecureTransportError
 from foreverbull.broker.credentials import TokenFileError
@@ -246,6 +247,21 @@ def test_no_token_opens_any_plaintext_channel(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("FOREVERBULL_TOKEN", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     broker_channel("fb.example.com:50055").close()
+
+
+def test_broker_url_order(tmp_path: Path):
+    assert resolve_broker_url(cwd=tmp_path, home=tmp_path, environ={}) == "http://localhost:8080"
+    assert (
+        resolve_broker_url(cwd=tmp_path, home=tmp_path, environ={"FOREVERBULL_BROKER_URL": "https://fb.example.com/"})
+        == "https://fb.example.com"
+    )
+    project = tmp_path / ".foreverbull" / "config.yaml"
+    project.parent.mkdir()
+    project.write_text("cluster: remote\nremote:\n  broker_address: fb.example.com:50055\n")
+    with pytest.raises(ValueError, match="remote.broker_url"):
+        resolve_broker_url(cwd=tmp_path, home=tmp_path, environ={})
+    project.write_text("cluster: remote\nremote:\n  broker_url: https://fb.example.com\n")
+    assert resolve_broker_url(cwd=tmp_path, home=tmp_path, environ={}) == "https://fb.example.com"
 
 
 def test_unreadable_meta_names_the_file(tmp_path: Path):
