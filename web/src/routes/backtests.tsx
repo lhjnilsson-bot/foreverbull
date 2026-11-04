@@ -20,7 +20,7 @@ import {
   rowActive,
   rowClass,
 } from "../components/fb";
-import { lastStoredPeriod, portfolioSeries } from "../equity";
+import { dividendNotes, lastStoredPeriod, portfolioSeries, returnMetrics } from "../equity";
 import type { Backtest, Execution, ExecutionResult, GetExecution } from "../types";
 import { postJson, useJson, type Load } from "../useJson";
 
@@ -299,8 +299,12 @@ function RunReport({
   const points = portfolioSeries(periods);
   const last = lastStoredPeriod(periods) ?? (stored ? execution.result : undefined);
   const id = execution.id ?? "";
-  // benchmark_period_return is a fraction. It stays off the portfolio-value axis.
-  const benchmarkReturn = last?.benchmarkPeriodReturn;
+  // The run's basis comes with the stored execution, not the list row.
+  const storedExecution = detail.state === "ready" ? detail.data.execution : undefined;
+  // The benchmark's returns are fractions too. They stay off the
+  // portfolio-value axis and come with the run's under the same words.
+  const returns = returnMetrics(storedExecution, last, benchmark);
+  const notes = dividendNotes(storedExecution);
 
   return (
     <div className="grid gap-8">
@@ -325,17 +329,22 @@ function RunReport({
       </div>
       {last ? (
         <div className="grid grid-cols-2 gap-x-8 gap-y-5 border-y py-6 md:grid-cols-4">
+          {returns.map((metric) => (
+            <Metric key={metric.label} label={metric.label} value={pct(metric.value)} />
+          ))}
           {typeof last.sharpe === "number" ? <Metric label="Sharpe" value={last.sharpe.toFixed(2)} /> : null}
           {typeof last.maxDrawdown === "number" ? <Metric label="Max drawdown" value={pct(last.maxDrawdown)} /> : null}
           {typeof last.portfolioValue === "number" ? <Metric label="Portfolio value" value={num(last.portfolioValue)} /> : null}
           {typeof last.endingValue === "number" ? <Metric label="End value" value={num(last.endingValue)} /> : null}
-          {typeof benchmarkReturn === "number" ? (
-            <Metric label={benchmark || "Benchmark"} value={pct(benchmarkReturn)} />
-          ) : null}
         </div>
       ) : detail.state === "loading" ? null : (
         <p className="text-muted-foreground">No result stored for this run.</p>
       )}
+      {notes.map((note) => (
+        <p key={note} className="text-muted-foreground">
+          {note}
+        </p>
+      ))}
       {detail.state === "loading" ? (
         <p className="flex items-center gap-2 text-muted-foreground">
           <LoaderCircle className="animate-spin motion-reduce:animate-none" size={16} aria-hidden />
