@@ -16,7 +16,6 @@ from protobuf import merge_from_binary
 from zipline.data import bundles
 from zipline.data.data_portal import DataPortal
 from zipline.extensions import load
-from zipline.finance import metrics
 from zipline.finance.blotter import Blotter
 from zipline.finance.trading import SimulationParameters
 from zipline.protocol import BarData
@@ -30,7 +29,14 @@ from foreverbull.pb.foreverbull.backtest.service.v1 import engine_pb as engine_s
 from foreverbull.pb.foreverbull.backtest.v1 import execution_pb
 from foreverbull.pb.foreverbull.finance.v1 import marketdata_pb
 from foreverbull_zipline.data_bundles.bundle_alignment import ensure_session_aligned_bundle
+from foreverbull_zipline.data_bundles.dividends import read_foreign_dividends
 from foreverbull_zipline.errors import PlainSentence
+from foreverbull_zipline.returns import UNPAID_DIVIDEND_LINE
+from foreverbull_zipline.returns import BenchmarkReturns
+from foreverbull_zipline.returns import DividendBook
+from foreverbull_zipline.returns import UnpaidDividendError
+from foreverbull_zipline.returns import dividend_metrics
+from foreverbull_zipline.returns import total_return_frame
 from zipline import TradingAlgorithm
 
 
@@ -48,6 +54,13 @@ class StopExcecution(Exception):
 PLAIN_SENTENCE_TAG = "plain-sentence: "
 
 
+class EngineRequestError(SystemError):
+    """The engine process failed a request and sent its error back.
+
+    It is the engine's own failure, not a lost or timed-out socket.
+    """
+
+
 def raise_response_error(response: common_pb.Response) -> None:
     """Raise the engine process's error, a PlainSentence when it sent one."""
     if not response.has_field("error"):
@@ -55,7 +68,7 @@ def raise_response_error(response: common_pb.Response) -> None:
     error = response.error or ""
     if error.startswith(PLAIN_SENTENCE_TAG):
         raise PlainSentence(error.removeprefix(PLAIN_SENTENCE_TAG))
-    raise SystemError(error)
+    raise EngineRequestError(error)
 
 
 def zero_benchmark_returns(sessions: pd.DatetimeIndex) -> pd.Series:
@@ -63,8 +76,13 @@ def zero_benchmark_returns(sessions: pd.DatetimeIndex) -> pd.Series:
     return pd.Series(index=sessions, data=0.0)
 
 
-def benchmark_returns(window_sessions, sessions, opens, closes) -> pd.Series:
-    """Benchmark daily returns on Zipline session labels.
+def zero_benchmark(sessions: pd.DatetimeIndex) -> BenchmarkReturns:
+    """No benchmark: flat total and price return."""
+    return BenchmarkReturns(total=zero_benchmark_returns(sessions), price=zero_benchmark_returns(sessions))
+
+
+def benchmark_returns(window_sessions, sessions, opens, closes, dividends: pd.Series) -> BenchmarkReturns:
+    """Benchmark daily total and price returns on Zipline session labels.
 
     ``window_sessions`` is ``sessions``, or ``sessions`` with the session
     before it, and every open and close in it is a stored price above 0
@@ -78,26 +96,49 @@ def benchmark_returns(window_sessions, sessions, opens, closes) -> pd.Series:
     instead lets Zipline compare the asset start (the first bar, stamped at
     the session open) against the session label and refuse the run, so the
     series is built here.
+
+    The total return adds the cash dividend per share on its ex-date,
+    r_t = (C_t + D_t) / C_{t-1} - 1, as a holder of the benchmark is paid
+    it. ``dividends`` is the amount per ex-date session label. An
+    open-to-close first session has no previous close to have held the
+    share at, so its dividend is left out.
     """
     session_index = pd.DatetimeIndex(sessions)
     if len(session_index) == 0:
-        return zero_benchmark_returns(session_index)
+        return zero_benchmark(session_index)
     window_index = pd.DatetimeIndex(window_sessions)
     close_series = pd.Series(data=[float(value) for value in closes], index=window_index, dtype=float)
     open_series = pd.Series(data=[float(value) for value in opens], index=window_index, dtype=float)
-    returns = close_series / close_series.shift(1) - 1.0
+    paid = pd.Series(dividends, dtype=float).reindex(window_index, fill_value=0.0)
+    price = close_series / close_series.shift(1) - 1.0
+    total = (close_series + paid) / close_series.shift(1) - 1.0
     if window_index[0] < session_index[0]:
         # The window day only lends its close; its own return has no
         # previous close and Zipline doesn't read it.
-        returns = returns.iloc[1:]
+        price = price.iloc[1:]
+        total = total.iloc[1:]
     else:
         first = session_index[0]
-        returns.iloc[0] = (close_series[first] - open_series[first]) / open_series[first]
-    return returns.loc[session_index]
+        price.iloc[0] = (close_series[first] - open_series[first]) / open_series[first]
+        total.iloc[0] = price.iloc[0]
+    return BenchmarkReturns(total=total.loc[session_index], price=price.loc[session_index])
 
 
-def load_benchmark_returns(backtest: str, bundle, benchmark_asset, trading_calendar, sessions) -> pd.Series:
-    """Read the benchmark's daily bars from the bundle on session labels.
+def benchmark_dividends(bundle, benchmark_asset, window_sessions: pd.DatetimeIndex) -> pd.Series:
+    """The benchmark's cash dividend per share on each ex-date in the window."""
+    rows = bundle.adjustment_reader.conn.execute(
+        "SELECT ex_date, amount FROM dividend_payouts WHERE sid = ?", (int(benchmark_asset.sid),)
+    ).fetchall()
+    paid = pd.Series(
+        data=[float(amount) for _, amount in rows],
+        index=pd.DatetimeIndex([pd.Timestamp(int(ex_date), unit="s") for ex_date, _ in rows]),
+        dtype=float,
+    )
+    return cast(pd.Series, paid[(paid.index >= window_sessions[0]) & (paid.index <= window_sessions[-1])])
+
+
+def load_benchmark_returns(backtest: str, bundle, benchmark_asset, trading_calendar, sessions) -> BenchmarkReturns:
+    """Read the benchmark's daily bars and dividends from the bundle on session labels.
 
     The window starts one session early so the first return is measured
     from the previous close. When the run starts on the benchmark's first
@@ -109,7 +150,7 @@ def load_benchmark_returns(backtest: str, bundle, benchmark_asset, trading_calen
     prices themselves are checked.
     """
     if len(sessions) == 0:
-        return zero_benchmark_returns(sessions)
+        return zero_benchmark(sessions)
     reader = bundle.equity_daily_bar_reader
     bundle_sessions = pd.DatetimeIndex(reader.sessions)
     first_session = benchmark_first_session(benchmark_asset)
@@ -132,7 +173,17 @@ def load_benchmark_returns(backtest: str, bundle, benchmark_asset, trading_calen
     if not usable.all():
         missing = pd.DatetimeIndex(window_sessions[~usable])
         raise PlainSentence(benchmark_missing_line(backtest, str(benchmark_asset.symbol), missing, window_sessions))
-    return benchmark_returns(window_sessions, sessions, opens, closes)
+    dividends = benchmark_dividends(bundle, benchmark_asset, window_sessions)
+    return benchmark_returns(window_sessions, sessions, opens, closes, dividends)
+
+
+def bundle_before_dividends_line(backtest: str) -> str:
+    """The run's failure on a bundle ingested before dividends were booked."""
+    return (
+        f"Couldn't run backtest '{backtest}': its data was loaded before dividends were counted, "
+        "so its returns would leave them out. Nothing was run. "
+        f"Run `fbull backtest delete {backtest}`, then `fbull backtest create` again."
+    )
 
 
 def benchmark_first_session(benchmark_asset) -> pd.Timestamp:
@@ -205,6 +256,21 @@ def _session_day(value) -> pd.Timestamp:
     return ts.normalize()
 
 
+def _optional(value) -> float | None:
+    """A metric that has no value yet, such as volatility on the first day, as unset."""
+    if value is None or pd.isnull(value):
+        return None
+    return float(value)
+
+
+def _number(value) -> float:
+    """A metric that always has a value; a missing one is an error, not 0."""
+    number = _optional(value)
+    if number is None:
+        raise ValueError("a reported metric has no value")
+    return number
+
+
 class Engine(multiprocessing.Process):
     def __init__(
         self,
@@ -215,6 +281,12 @@ class Engine(multiprocessing.Process):
         self._logging_queue = logging_queue
         self.logger = logging.getLogger().getChild(__name__)
         self.is_ready = multiprocessing.Event()
+        self._dividend_book = DividendBook(set())
+        self._benchmark: BenchmarkReturns | None = None
+        # Why the last run stopped before its end, told on the next period
+        # request; None when it ran to its end or crashed.
+        self._run_failure: PlainSentence | None = None
+        self._capital_base = 0.0
         super().__init__()
 
     def run_backtest(self, backtest: engine_service_pb.RunBacktestRequest) -> engine_service_pb.RunBacktestResponse:
@@ -357,14 +429,17 @@ class Engine(multiprocessing.Process):
         trading_calendar = get_calendar("XNYS")
         sessions = trading_calendar.sessions_in_range(start_date, end_date)  # type: ignore[arg-type]
 
+        foreign = read_foreign_dividends(bundle.adjustment_reader.conn)
+        if foreign is None:
+            raise PlainSentence(bundle_before_dividends_line(execution.backtest))
+
         benchmark_sid = None
         if req.benchmark:
             benchmark_asset = bundle.asset_finder.lookup_symbol(req.benchmark, as_of_date=None)
-            stored_benchmark_returns = load_benchmark_returns(
-                execution.backtest, bundle, benchmark_asset, trading_calendar, sessions
-            )
+            benchmark = load_benchmark_returns(execution.backtest, bundle, benchmark_asset, trading_calendar, sessions)
         else:
-            stored_benchmark_returns = zero_benchmark_returns(sessions)
+            benchmark = zero_benchmark(sessions)
+        self._benchmark = benchmark
 
         data_portal = DataPortal(
             bundle.asset_finder,
@@ -380,16 +455,10 @@ class Engine(multiprocessing.Process):
             trading_calendar=trading_calendar,
             data_frequency="daily",
         )
+        self._capital_base = float(sim_params.capital_base)
         num_periods = int(sessions.size)  # type: ignore
-        metrics_set = "default"
+        metrics_set, self._dividend_book = dividend_metrics(foreign)
         blotter = "default"
-        if isinstance(metrics_set, six.string_types):
-            try:
-                metrics_set = metrics.load(metrics_set)
-            except ValueError as e:
-                self.logger.error("Error configuring metrics: %s", repr(e))
-                raise ConfigError(repr(e))
-
         if isinstance(blotter, six.string_types):
             try:
                 blotter = load(Blotter, blotter)
@@ -405,7 +474,7 @@ class Engine(multiprocessing.Process):
             sim_params=sim_params,
             metrics_set=metrics_set,
             blotter=blotter,
-            benchmark_returns=stored_benchmark_returns,
+            benchmark_returns=benchmark.total,
             benchmark_sid=benchmark_sid,
             handle_data=handle_data,
             analyze=self.analyze,
@@ -480,15 +549,20 @@ class Engine(multiprocessing.Process):
         merge_from_binary(req, data)
         assert self.result is not None, "no result"
         assert type(self.result) is pd.DataFrame, "result is not a dataframe"
-        rsp = engine_service_pb.GetResultResponse()
+        assert self._benchmark is not None, "no benchmark"
+        rsp = engine_service_pb.GetResultResponse(foreign_dividends_gross=self._dividend_book.foreign_booked)
+        # Value, returns and risk metrics are computed from the total
+        # return against the benchmark's, with the price returns beside them.
+        totals = total_return_frame(self.result, self._capital_base, self._benchmark)
         for row in self.result.index:
             period = self.result.loc[row]
+            total = totals.loc[row]
             rsp.periods.append(
                 execution_pb.Period(
                     date=pb_utils.from_pydate_to_proto_date(period["period_close"].to_pydatetime().replace()),
-                    PNL=period["pnl"],
-                    returns=period["returns"],
-                    portfolio_value=period["portfolio_value"],
+                    PNL=total["pnl"],
+                    returns=total["returns"],
+                    portfolio_value=total["portfolio_value"],
                     longs_count=int(period["longs_count"]),
                     shorts_count=int(period["shorts_count"]),
                     long_value=period["long_value"],
@@ -504,22 +578,21 @@ class Engine(multiprocessing.Process):
                     ending_value=period["ending_value"],
                     starting_cash=period["starting_cash"],
                     ending_cash=period["ending_cash"],
-                    max_drawdown=period["max_drawdown"],
+                    max_drawdown=_number(total["max_drawdown"]),
                     max_leverage=period["max_leverage"],
                     excess_return=period["excess_return"],
                     treasury_period_return=period["treasury_period_return"],
-                    algorithm_period_return=period["algorithm_period_return"],
-                    algo_volatility=(None if pd.isnull(period["algo_volatility"]) else period["algo_volatility"]),
-                    sharpe=None if pd.isnull(period["sharpe"]) else period["sharpe"],
-                    sortino=None if pd.isnull(period["sortino"]) else period["sortino"],
-                    benchmark_period_return=(
-                        None if pd.isnull(period["benchmark_period_return"]) else period["benchmark_period_return"]
-                    ),
-                    benchmark_volatility=(
-                        None if pd.isnull(period["benchmark_volatility"]) else period["benchmark_volatility"]
-                    ),
-                    alpha=(None if period["alpha"] is None or pd.isnull(period["alpha"]) else period["alpha"]),
-                    beta=(None if period["beta"] is None or pd.isnull(period["beta"]) else period["beta"]),
+                    algorithm_period_return=total["algorithm_period_return"],
+                    price_return=total["price_return"],
+                    dividends_earned=total["dividends_earned"],
+                    algo_volatility=_optional(total["algo_volatility"]),
+                    sharpe=_optional(total["sharpe"]),
+                    sortino=_optional(total["sortino"]),
+                    benchmark_period_return=_optional(total["benchmark_period_return"]),
+                    benchmark_price_return=_optional(total["benchmark_price_return"]),
+                    benchmark_volatility=_optional(total["benchmark_volatility"]),
+                    alpha=_optional(total["alpha"]),
+                    beta=_optional(total["beta"]),
                 )
             )
         upload = req.upload
@@ -528,6 +601,20 @@ class Engine(multiprocessing.Process):
             self.result.to_pickle("/tmp/result.pkl")
             storage.upload_object(upload.bucket, upload.object, "/tmp/result.pkl")
         return rsp.to_binary()
+
+    def _run_algorithm(self, trading_algorithm) -> None:
+        """Run the algorithm to its end.
+
+        A dividend the run didn't pay stops it the same way every time, so it
+        is kept as the run's failure and told on the next period request,
+        not left to look like a crash. Any other error propagates as before.
+        """
+        self._run_failure = None
+        try:
+            trading_algorithm.run()
+        except UnpaidDividendError as exc:
+            self.log.error("The backtest run stopped: %s", exc)
+            self._run_failure = PlainSentence(UNPAID_DIVIDEND_LINE)
 
     def _process_request(
         self,
@@ -552,9 +639,11 @@ class Engine(multiprocessing.Process):
                                 ta, data = self._run(req.data, socket)
                                 rsp.data = data
                                 context_socket.send(rsp.to_binary())
-                                ta.run()
+                                self._run_algorithm(ta)
                                 return
                         case "get_current_period":
+                            if trading_algorithm is None and self._run_failure is not None:
+                                raise self._run_failure
                             if trading_algorithm is None:
                                 rsp.data = engine_service_pb.GetCurrentPeriodResponse(is_running=False).to_binary()
                                 context_socket.send(rsp.to_binary())
