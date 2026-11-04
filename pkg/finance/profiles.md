@@ -81,9 +81,9 @@ Stored bars are adjusted per provider as follows. A split never shows as a one-d
 
 | Provider | Splits | Dividends | Return basis |
 | --- | --- | --- | --- |
-| `yahoo` | adjusted (chart `close`) | not adjusted | price return |
-| `alpaca` | adjusted (`adjustment=split`, sent explicitly; the SDK default is `raw`) | not adjusted | price return |
-| `stooq` | adjusted | adjusted | close to total return |
+| `yahoo` | adjusted (chart `close`) | not adjusted; booked as cash | total return, with the price return beside it |
+| `alpaca` | adjusted (`adjustment=split`, sent explicitly; the SDK default is `raw`) | not adjusted; booked as cash | total return, with the price return beside it |
+| `stooq` | adjusted | adjusted; none booked | adjusted-close return (dividends inside prices) |
 
 Bars already stored are not replaced on a later download (`ON CONFLICT DO NOTHING`). Alpaca bars downloaded before this change stay unadjusted. A way to fetch them again is planned.
 
@@ -118,6 +118,34 @@ Ingest keeps one scale per provider and symbol. A bar is bad when its open, high
 - A provider call that times out while there is still time (an HTTP timeout, Alpaca's fetch budget, a refetch in `Sync`, or a provider wait refused under one of those shorter deadlines) fails that symbol with `<provider> took too long to respond for SYM` as `STATUS_ERROR`. Backtest create turns it into `Couldn't load data for backtest 'NAME': <provider> took too long to respond for SYM. The backtest wasn't saved. Try again later, or use another provider with --provider.` The ingest task state is `<provider> took too long to respond for SYM, so the price import stopped. Prices imported before SYM were kept. Try again later.`
 - Ingest writes bars only inside a transaction: new days go through `OHLC.StoreBars` and replaced ranges through `OHLC.ReplaceRange`. A connection that can't open a transaction gets `ErrNoTransaction`, and nothing is written or removed.
 - A requested range that is already stored is not fetched.
+
+## 📝 Cash dividends
+
+Dividends are on for `yahoo` and `alpaca` with no switch to turn them off. `stooq` books none, because its prices already include them; booking them as cash would count them twice. Asking for cash dividends on stooq (`OHLC.SyncWithDividends` with `stooq`, or a stooq bundle handed dividends) fails, and nothing is fetched or stored. No user flow reaches either (`SyncSource` stores stooq through `Sync`, and the ingest service never hands a stooq bundle dividends), so the text asks for a report: `Couldn't load data for backtest 'NAME': foreverbull has cash dividends stored for stooq, whose prices already include them, so they'd be counted twice. The backtest wasn't saved. Please report it at https://github.com/lhjnilsson/foreverbull/issues with this message.` (the Go error reads `foreverbull was asked to store cash dividends for stooq, … Nothing was stored. Please report it …`).
+
+Fetching and storing:
+
+- Every yahoo or alpaca price import fetches the symbol's cash dividends too (`OHLC.SyncSource`), before the symbol lock, from the earlier of the requested start and the first stored bar through today. Yahoo reads the chart's `events=div` (ex-date only, as a New York date; no pay date). Alpaca reads `/v1/corporate-actions` and divides each rate by every later split up to today, so the amount is on the same split-adjusted basis as the bars. A foreign issuer's dividend keeps its full rate and its flag.
+- The dividends are replaced in the same transaction as the bars (`Dividends.Replace`), and `dividend_fetch` records the span of stored bars they cover. A failed dividend fetch fails the symbol and stores no bars. It has the same form and causes as a failed price download (`financeapi.DividendFetchError`, sent as `dividend_failure`); the provider's own text is logged only. For example: `foreverbull couldn't download dividends for KO from yahoo: yahoo had a server error (HTTP 503). Its prices weren't saved either. Run the download again in a few minutes, or try another provider.` Backtest create collects it with the price failures: `Couldn't load data for backtest 'NAME': foreverbull couldn't download dividends for KO from yahoo: <cause>. The backtest wasn't saved. <step>`.
+- `dividend` is unique on `(provider, symbol, ex_date)`. A dividend is refused, and nothing for the symbol is written, when its ex-date is missing, its amount is 0, negative or not a number, its currency is not USD (an empty currency is USD), or two share one ex-date: `PROVIDER sent dividends for SYM that can't be used: ex-date DATE: REASON. Its prices weren't saved either. Try another provider, or report it at https://github.com/lhjnilsson/foreverbull/issues with this message.` The pay and record dates are stored as sent, or NULL when the provider sends none or one that can't be read; they are shown only ("pay date unknown" when NULL), never checked or estimated. One error names every refused dividend.
+- An Alpaca stock dividend, spin-off or merger is stored in `corporate_action` with its ex-date (a merger's effective date), in the same transaction as the dividends. It doesn't fail the download: a backtest fails only when its window holds one (see the bundle below).
+
+In the Zipline bundle (`client/zipline`, `data_bundles/dividends.py`):
+
+- Ingest reads the dividends of every ticker of an instrument inside its bars. Bars outside the `dividend_fetch` span fail the ingest: their dividends are unknown, not none. Its step is to run `fbull backtest create` again to load the missing dividends; every other refused dividend is in the provider's data, so its step matches the broker's: `Use another provider with --provider, or report it at https://github.com/lhjnilsson/foreverbull/issues with this message.` The refusal counts dividends by symbol (`dividends for 1 symbol weren't loaded` when none were loaded, `dividends for 2 symbols can't be booked` otherwise) and corporate actions one by one.
+- A stored corporate action with an ex-date inside the backtest's window fails the ingest as `a spin-off, which foreverbull can't book` (or a stock dividend, or the merger kind). One outside the window, such as after its end, changes nothing.
+- A dividend is refused when its ex-date is not an XNYS session, has no stored bar on the session before it, or its amount is not below that close. A dividend on an instrument's first bar is left out: nothing can be held at a close before it.
+- The bundle writes the ex-date as Zipline's pay date, so the cash lands at the ex-date open. A missing, odd or later pay date changes nothing. A dividend Zipline still holds unpaid at a close stops the run, and fbull shows `The backtest run stopped: foreverbull didn't pay a dividend on its ex-date. This is a problem in foreverbull, not in your algo. Please report it at https://github.com/lhjnilsson/foreverbull/issues with this message.` (the amount and session go to the log).
+- Foreign dividends are listed in `foreverbull_foreign_dividend` in the adjustments database. A bundle without that table was ingested before dividends were booked, and a run on it is refused.
+
+In a run (`client/zipline`, `returns.py`):
+
+- A dividend is credited to cash at the open of its ex-date: the shares held at the previous close times the amount, negative for a short. The strategy can spend it from that session on, about 2 to 4 weeks before a real broker would pay it. This changes when cash can be spent, not the value or the total return. All three UIs say "Dividends paid on the ex-date". Dividend cash is not reinvested.
+- `V_t` is Zipline's portfolio value. `Dcum_t` is every dividend credited so far. The total return is `V_t / V_0 - 1` and the price return `(V_t - Dcum_t) / V_0 - 1`.
+- Volatility, Sharpe, Sortino, drawdown, alpha and beta come from the daily total return against the benchmark's daily total return, `(C_t + D_t) / C_{t-1} - 1`. A benchmark that starts on the run's first session has no previous close, so that session is open to close without its dividend.
+- Foreign dividends are booked gross, before withholding, and the run stores how many it booked.
+
+The execution stores its `return_basis` (`total` or `adjusted_close`) and that count. A run stored before this has neither and keeps the plain "Return" label.
 
 ## CLI
 
