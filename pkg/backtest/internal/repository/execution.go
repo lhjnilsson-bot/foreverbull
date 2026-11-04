@@ -28,6 +28,11 @@ CONSTRAINT backtest_execution_provider_check CHECK (provider IN ('yahoo', 'stooq
 
 ALTER TABLE backtest_execution ADD COLUMN IF NOT EXISTS function_arguments jsonb;
 ALTER TABLE backtest_execution ADD COLUMN IF NOT EXISTS notices text[];
+-- NULL on both: a run stored before dividends were booked as cash.
+ALTER TABLE backtest_execution ADD COLUMN IF NOT EXISTS return_basis text
+	CONSTRAINT backtest_execution_return_basis_check CHECK (return_basis IN ('total', 'adjusted_close'));
+ALTER TABLE backtest_execution ADD COLUMN IF NOT EXISTS foreign_dividends_gross integer
+	CONSTRAINT backtest_execution_foreign_dividends_gross_check CHECK (foreign_dividends_gross >= 0);
 
 
 CREATE TABLE IF NOT EXISTS backtest_execution_period (
@@ -86,6 +91,11 @@ BEGIN
         ALTER TABLE backtest_execution_period ADD CONSTRAINT unique_backtest_execution_period UNIQUE(backtest_execution, date);
     END IF;
 END $$;
+
+-- NULL on a run stored before dividends were booked as cash.
+ALTER TABLE backtest_execution_period ADD COLUMN IF NOT EXISTS price_return numeric;
+ALTER TABLE backtest_execution_period ADD COLUMN IF NOT EXISTS dividends_earned numeric;
+ALTER TABLE backtest_execution_period ADD COLUMN IF NOT EXISTS benchmark_price_return numeric;
 `
 
 const executionProviderCheck = "backtest_execution_provider_check"
@@ -331,8 +341,79 @@ func (db *Execution) GetNotices(ctx context.Context, executionID string) ([]stri
 }
 
 func (db *Execution) StorePeriods(ctx context.Context, execution string, periods []*backtest.Period) error {
+	return storePeriods(ctx, db.Conn, execution, periods)
+}
+
+// returnBasisNames is how a return basis is stored. A run stored before
+// dividends were booked as cash has none.
+var returnBasisNames = map[backtest.ReturnBasis]string{
+	backtest.ReturnBasis_RETURN_BASIS_TOTAL:          "total",
+	backtest.ReturnBasis_RETURN_BASIS_ADJUSTED_CLOSE: "adjusted_close",
+}
+
+// StoreResult stores a finished run's periods with the basis of its
+// returns and the number of foreign dividends it booked gross, in one
+// transaction, so a run with periods always says what its return is.
+func (db *Execution) StoreResult(ctx context.Context, execution string, basis backtest.ReturnBasis, foreignGross int32, periods []*backtest.Period) error {
+	name, ok := returnBasisNames[basis]
+	if !ok {
+		return fmt.Errorf("failed to store result: unknown return basis %s", basis)
+	}
+	if foreignGross < 0 {
+		return fmt.Errorf("failed to store result: %d foreign dividends", foreignGross)
+	}
+	begin, ok := db.Conn.(txBeginner)
+	if !ok {
+		return fmt.Errorf("failed to store result: connection cannot begin a transaction")
+	}
+	tx, err := begin.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to store result: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
+	tag, err := tx.Exec(ctx,
+		`UPDATE backtest_execution SET return_basis=$2, foreign_dividends_gross=$3 WHERE id=$1`,
+		execution, name, foreignGross)
+	if err != nil {
+		return fmt.Errorf("failed to store result: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("failed to store result: %w", pgx.ErrNoRows)
+	}
+	if err := storePeriods(ctx, tx, execution, periods); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to store result: %w", err)
+	}
+	return nil
+}
+
+// GetReturnBasis returns the basis of a run's returns and the number of
+// foreign dividends it booked gross. A run stored before dividends were
+// booked as cash returns RETURN_BASIS_UNSPECIFIED and 0.
+func (db *Execution) GetReturnBasis(ctx context.Context, executionID string) (backtest.ReturnBasis, int32, error) {
+	var name sql.NullString
+	var foreignGross sql.NullInt32
+	err := db.Conn.QueryRow(ctx,
+		`SELECT return_basis, foreign_dividends_gross FROM backtest_execution WHERE id=$1`, executionID).Scan(&name, &foreignGross)
+	if err != nil {
+		return backtest.ReturnBasis_RETURN_BASIS_UNSPECIFIED, 0, fmt.Errorf("failed to get execution return basis: %w", err)
+	}
+	if !name.Valid {
+		return backtest.ReturnBasis_RETURN_BASIS_UNSPECIFIED, 0, nil
+	}
+	for basis, stored := range returnBasisNames {
+		if stored == name.String {
+			return basis, foreignGross.Int32, nil
+		}
+	}
+	return backtest.ReturnBasis_RETURN_BASIS_UNSPECIFIED, 0, fmt.Errorf("failed to get execution return basis: unknown %q", name.String)
+}
+
+func storePeriods(ctx context.Context, conn postgres.Query, execution string, periods []*backtest.Period) error {
 	for _, period := range periods {
-		_, err := db.Conn.Exec(ctx,
+		_, err := conn.Exec(ctx,
 			`INSERT INTO backtest_execution_period(
 				backtest_execution, date, pnl, returns, portfolio_value,
 				longs_count, shorts_count, long_value, short_value, starting_exposure, ending_exposure, long_exposure, short_exposure,
@@ -340,14 +421,16 @@ func (db *Execution) StorePeriods(ctx context.Context, execution string, periods
 				starting_value, ending_value, starting_cash, ending_cash,
 				max_drawdown, max_leverage, excess_returns, treasury_period_return, algorithm_period_return,
 				algo_volatility, sharpe, sortino,
-				benchmark_period_return, benchmark_volatility, alpha, beta)
+				benchmark_period_return, benchmark_volatility, alpha, beta,
+				price_return, dividends_earned, benchmark_price_return)
 			VALUES($1, $2, $3, $4, $5,
 				$6, $7, $8, $9, $10, $11, $12, $13,
 				$14, $15, $16,
 				$17, $18, $19, $20,
 				$21, $22, $23, $24, $25,
 				$26, $27, $28,
-				$29, $30, $31, $32)`,
+				$29, $30, $31, $32,
+				$33, $34, $35)`,
 			execution, internal_pb.DateToDateString(period.Date), period.PNL, period.Returns, period.PortfolioValue,
 			period.LongsCount, period.ShortsCount, period.LongValue, period.ShortValue, period.StartingExposure, period.EndingExposure, period.LongExposure, period.ShortExposure,
 			period.CapitalUsed, period.GrossLeverage, period.NetLeverage,
@@ -355,6 +438,7 @@ func (db *Execution) StorePeriods(ctx context.Context, execution string, periods
 			period.MaxDrawdown, period.MaxLeverage, period.ExcessReturn, period.TreasuryPeriodReturn, period.AlgorithmPeriodReturn,
 			period.AlgoVolatility, period.Sharpe, period.Sortino,
 			period.BenchmarkPeriodReturn, period.BenchmarkVolatility, period.Alpha, period.Beta,
+			period.PriceReturn, period.DividendsEarned, period.BenchmarkPriceReturn,
 		)
 		if err != nil {
 			return fmt.Errorf("error creating period result: %w", err)
@@ -398,7 +482,8 @@ func (db *Execution) GetPeriods(ctx context.Context, executionId string) ([]*bac
 		net_leverage, starting_value, ending_value, starting_cash, ending_cash, max_drawdown,
 		max_leverage, excess_returns, treasury_period_return, algorithm_period_return,
 		algo_volatility, sharpe, sortino, benchmark_period_return, benchmark_volatility,
-		alpha, beta FROM backtest_execution_period WHERE backtest_execution=$1 ORDER BY DATE ASC`, executionId)
+		alpha, beta, price_return, dividends_earned, benchmark_price_return
+		FROM backtest_execution_period WHERE backtest_execution=$1 ORDER BY DATE ASC`, executionId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get periods: %w", err)
 	}
@@ -438,13 +523,16 @@ func (db *Execution) GetPeriods(ctx context.Context, executionId string) ([]*bac
 		benchmarkVolatility := sql.NullFloat64{}
 		alpha := sql.NullFloat64{}
 		beta := sql.NullFloat64{}
+		priceReturn := sql.NullFloat64{}
+		dividendsEarned := sql.NullFloat64{}
+		benchmarkPriceReturn := sql.NullFloat64{}
 
 		err = rows.Scan(&periodDate, &pnl, &returns, &portfolioValue, &longsCount, &shortsCount,
 			&longValue, &shortValue, &startingExposure, &endingExposure, &longExposure, &shortExposure, &capitalUsed, &grossLeverage,
 			&netLeverage, &startingValue, &endingValue, &startingCash, &endingCash, &maxDrawdown,
 			&maxLeverage, &excessReturn, &treasuryPeriodReturn, &algorithmPeriodReturn,
 			&algoVolatility, &sharpe, &sortino, &benchmarkPeriodReturn, &benchmarkVolatility,
-			&alpha, &beta)
+			&alpha, &beta, &priceReturn, &dividendsEarned, &benchmarkPriceReturn)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan period: %w", err)
 		}
@@ -538,6 +626,17 @@ func (db *Execution) GetPeriods(ctx context.Context, executionId string) ([]*bac
 		}
 		if beta.Valid {
 			period.Beta = &beta.Float64
+		}
+		// NULL on a run stored before dividends were booked as cash; its
+		// return basis is unspecified, so these are not read.
+		if priceReturn.Valid {
+			period.PriceReturn = priceReturn.Float64
+		}
+		if dividendsEarned.Valid {
+			period.DividendsEarned = dividendsEarned.Float64
+		}
+		if benchmarkPriceReturn.Valid {
+			period.BenchmarkPriceReturn = &benchmarkPriceReturn.Float64
 		}
 
 		periods = append(periods, &period)
