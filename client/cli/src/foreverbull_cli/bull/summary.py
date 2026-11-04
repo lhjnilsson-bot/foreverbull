@@ -178,12 +178,48 @@ def no_trades_line(day_count: int) -> str:
     return f"No trades: the strategy held no position on any of the {day_count} trading days."
 
 
-def metrics_table(benchmark: str, periods: list[execution_pb.Period]) -> Table:
+# How each return basis labels the run's return. A run stored before
+# dividends were booked as cash has no basis and keeps the plain label.
+TOTAL_RETURN_LABEL = "Total return"
+PRICE_RETURN_LABEL = "Price return"
+ADJUSTED_CLOSE_RETURN_LABEL = "Adjusted-close return"
+LEGACY_RETURN_LABEL = "Return"
+ADJUSTED_CLOSE_NOTE = "Adjusted-close return (dividends inside prices): no dividends were booked as cash."
+EX_DATE_NOTE = "Dividends paid on the ex-date: the cash lands then, not on the pay date."
+
+
+def _return_basis(execution: execution_pb.Execution) -> execution_pb.ReturnBasis:
+    # An unset enum is its zero value, UNSPECIFIED.
+    return execution.return_basis or execution_pb.ReturnBasis.UNSPECIFIED
+
+
+def return_labels(execution: execution_pb.Execution) -> list[str]:
+    """The labels of a run's returns: total and price, adjusted-close, or the plain one."""
+    match _return_basis(execution):
+        case execution_pb.ReturnBasis.TOTAL:
+            return [TOTAL_RETURN_LABEL, PRICE_RETURN_LABEL]
+        case execution_pb.ReturnBasis.ADJUSTED_CLOSE:
+            return [ADJUSTED_CLOSE_RETURN_LABEL]
+        case _:
+            return [LEGACY_RETURN_LABEL]
+
+
+def _benchmark_price_cell(benchmark: str, period: execution_pb.Period) -> str:
+    if not benchmark:
+        return "not set"
+    if not period.has_field("benchmark_price_return"):
+        return "not available"
+    return format_percent(period.benchmark_price_return)
+
+
+def metrics_table(benchmark: str, periods: list[execution_pb.Period], basis: execution_pb.ReturnBasis) -> Table:
     """Last-period scalars, the first session's open value, and days in a position.
 
     Return, ratios, drawdown, and ending portfolio value come from the last
     stored period. Sharpe and Sortino stay dashes when that period left them
     unset. Start is the first session's open account, not the last morning.
+    A total-return run shows its price return beside it, and the benchmark's
+    the same way.
     """
     last = periods[-1]
     table = Table.grid(padding=(0, 2))
@@ -198,7 +234,20 @@ def metrics_table(benchmark: str, periods: list[execution_pb.Period]) -> Table:
         "End",
         format_usd(last.portfolio_value),
     )
-    table.add_row("Return", format_percent(last.algorithm_period_return), benchmark_label, benchmark_value)
+    algorithm_return = format_percent(last.algorithm_period_return)
+    match basis:
+        case execution_pb.ReturnBasis.TOTAL:
+            table.add_row(TOTAL_RETURN_LABEL, algorithm_return, f"{benchmark_label} total", benchmark_value)
+            table.add_row(
+                PRICE_RETURN_LABEL,
+                format_percent(last.price_return),
+                f"{benchmark_label} price",
+                _benchmark_price_cell(benchmark, last),
+            )
+        case execution_pb.ReturnBasis.ADJUSTED_CLOSE:
+            table.add_row(ADJUSTED_CLOSE_RETURN_LABEL, algorithm_return, benchmark_label, benchmark_value)
+        case _:
+            table.add_row(LEGACY_RETURN_LABEL, algorithm_return, benchmark_label, benchmark_value)
     table.add_row("Sharpe", _ratio(last, "sharpe"), "Sortino", _ratio(last, "sortino"))
     table.add_row(
         "Max drawdown",
@@ -209,6 +258,23 @@ def metrics_table(benchmark: str, periods: list[execution_pb.Period]) -> Table:
     return table
 
 
+def dividend_lines(execution: execution_pb.Execution, periods: list[execution_pb.Period]) -> list[str]:
+    """What the summary says about dividends, under the table."""
+    basis = _return_basis(execution)
+    lines: list[str] = []
+    if basis == execution_pb.ReturnBasis.ADJUSTED_CLOSE:
+        lines.append(ADJUSTED_CLOSE_NOTE)
+    if basis != execution_pb.ReturnBasis.TOTAL or not periods:
+        return lines
+    lines.append(EX_DATE_NOTE)
+    foreign = execution.foreign_dividends_gross
+    if foreign == 1:
+        lines.append("1 foreign dividend booked gross, before withholding.")
+    elif foreign > 1:
+        lines.append(f"{foreign} foreign dividends booked gross, before withholding.")
+    return lines
+
+
 def print_run_summary(
     *,
     backtest_name: str,
@@ -217,6 +283,7 @@ def print_run_summary(
     start_iso: str,
     end_iso: str,
     execution_id: str,
+    execution: execution_pb.Execution,
     periods: list[execution_pb.Period],
     notices: list[str] | None = None,
     resolutions: Sequence[LaterTicker] = (),
@@ -230,8 +297,13 @@ def print_run_summary(
             f"[green]✔[/green] Backtest finished: {escape(backtest_name)} · {start_iso} → {end_iso} · provider: {provider}"
         )
         console.print()
-        console.print(Padding(metrics_table(benchmark, periods), (0, 0, 0, 2), expand=False))
+        console.print(Padding(metrics_table(benchmark, periods, _return_basis(execution)), (0, 0, 0, 2), expand=False))
         console.print()
+        dividends = dividend_lines(execution, periods)
+        for line in dividends:
+            console.print(f"  {line}", markup=False, highlight=False, soft_wrap=True)
+        if dividends:
+            console.print()
         if held_no_position(periods):
             # Without this line a tradeless run reads as a broken one: zeros and dashes, no reason.
             console.print(f"  {no_trades_line(len(periods))}", highlight=False)

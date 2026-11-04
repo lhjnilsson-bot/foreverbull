@@ -1844,6 +1844,31 @@ def test_backtest_run_with_a_held_position_has_no_no_trades_line(runner):
     assert "1 of 3" in drawdown_line
 
 
+def test_backtest_run_shows_total_and_price_return_and_the_dividends(runner):
+    execution = _sample_execution()
+    execution.return_basis = execution_pb.ReturnBasis.TOTAL
+    execution.foreign_dividends_gross = 2
+    end = _final_period()
+    end.algorithm_period_return = 0.128124
+    end.price_return = 0.111963
+    result, _ = _invoke_run(runner, _run_session_mocks(), [end], execution_entity=execution)
+    assert result.exit_code == 0
+    assert "+12.8%" in next(line for line in result.stdout.splitlines() if "Total return" in line)
+    assert "+11.2%" in next(line for line in result.stdout.splitlines() if "Price return" in line)
+    assert "  Dividends paid on the ex-date: the cash lands then, not on the pay date.\n" in result.stdout
+    assert "  2 foreign dividends booked gross, before withholding.\n" in result.stdout
+
+
+def test_backtest_run_labels_a_stooq_return_adjusted_close(runner):
+    execution = _sample_execution()
+    execution.return_basis = execution_pb.ReturnBasis.ADJUSTED_CLOSE
+    result, _ = _invoke_run(runner, _run_session_mocks(), [_final_period()], execution_entity=execution)
+    assert result.exit_code == 0
+    assert "Adjusted-close return " in result.stdout
+    assert "  Adjusted-close return (dividends inside prices): no dividends were booked as cash.\n" in result.stdout
+    assert "Price return" not in result.stdout
+
+
 def test_backtest_run_without_stored_periods_says_so(runner):
     result, _ = _invoke_run(runner, _run_session_mocks(), [])
     assert result.exit_code == 0
@@ -2093,6 +2118,55 @@ def test_backtest_execution(runner):
         assert "1.50000" in result.stdout
         assert "2020-01-02" in result.stdout
         assert f"Link: {execution_link(full_id)}" in result.stdout
+
+
+def test_backtest_execution_shows_total_and_price_return_under_the_periods(runner):
+    # The demo's numbers: a six-figure value and every ratio set. The
+    # periods table keeps every column readable in 80 columns, and the
+    # run's returns follow it, labelled.
+    full_id = "01234567-89ab-cdef-0123-456789abcdef"
+    execution = _sample_execution(full_id)
+    execution.return_basis = execution_pb.ReturnBasis.TOTAL
+    first = execution_pb.Period(
+        date=from_pydate_to_proto_date(date(2021, 3, 30)),
+        portfolio_value=93123.45678,
+        algorithm_period_return=-0.068,
+        price_return=-0.069,
+    )
+    last = execution_pb.Period(
+        date=from_pydate_to_proto_date(date(2021, 3, 31)),
+        portfolio_value=94591.32123,
+        algorithm_period_return=0.128124,
+        price_return=0.111963,
+        alpha=-0.312345,
+        beta=0.312345,
+        sharpe=-2.012345,
+        sortino=-2.371234,
+    )
+    with patch("foreverbull.broker.backtest.get_execution") as mock_get_execution:
+        mock_get_execution.return_value = (execution, [first, last], [], "yahoo")
+        result = runner(backtest, ["execution", full_id])
+    assert result.exit_code == 0
+    assert "Portfolio" in result.stdout
+    row = next(line for line in result.stdout.splitlines() if "2021-03-31" in line)
+    assert "94591.32123" in row
+    assert "-2.37123" in row
+    assert "Total return +12.8% · Price return +11.2%\n" in result.stdout
+
+
+def test_backtest_execution_labels_an_adjusted_close_return(runner):
+    full_id = "01234567-89ab-cdef-0123-456789abcdef"
+    execution = _sample_execution(full_id)
+    execution.return_basis = execution_pb.ReturnBasis.ADJUSTED_CLOSE
+    period = execution_pb.Period(
+        date=from_pydate_to_proto_date(date(2020, 1, 2)), portfolio_value=1000.5, algorithm_period_return=0.12
+    )
+    with patch("foreverbull.broker.backtest.get_execution") as mock_get_execution:
+        mock_get_execution.return_value = (execution, [period], [], "stooq")
+        result = runner(backtest, ["execution", full_id])
+    assert result.exit_code == 0
+    assert "Adjusted-close return +12.0%\n" in result.stdout
+    assert "Price return" not in result.stdout
 
 
 def test_backtest_execution_shows_pinned_inputs(runner):
