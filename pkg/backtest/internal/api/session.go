@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -199,9 +200,7 @@ func (s *grpcSessionServer) RunExecution(req *servicePb.RunExecutionRequest, str
 	}
 	if failure, ok := s.backtestSession.(interface{ RunFailure() error }); ok {
 		if err := failure.RunFailure(); err != nil {
-			log.Error().Err(err).Msg("backtest run failed")
-			// Fixed sentence: err.Error() can quote a DB URL or stack fragment.
-			return status.Error(codes.FailedPrecondition, "The backtest run stopped early. Try again, or run `fbenv status`.")
+			return runFailureError(err)
 		}
 	}
 	if noticed, ok := s.backtestSession.(interface{ RunNotices() []string }); ok {
@@ -223,14 +222,95 @@ func (s *grpcSessionServer) StoreResult(ctx context.Context, req *servicePb.Stor
 	}
 	rsp, err := s.backtestSession.GetResult(ctx, req.ExecutionId)
 	if err != nil {
-		return nil, fmt.Errorf("error getting result: %w", err)
+		return nil, getResultError(req.ExecutionId, err)
 	}
 	executions := repository.Execution{Conn: s.db}
-	err = executions.StorePeriods(ctx, req.ExecutionId, rsp.Periods)
+	provider, err := executions.GetProvider(ctx, req.ExecutionId)
+	if err != nil {
+		return nil, fmt.Errorf("error getting execution provider: %w", err)
+	}
+	basis, err := returnBasis(provider)
+	if err != nil {
+		return nil, fmt.Errorf("error storing result: %w", err)
+	}
+	err = executions.StoreResult(ctx, req.ExecutionId, basis, rsp.GetForeignDividendsGross(), rsp.Periods)
 	if err != nil {
 		return nil, fmt.Errorf("error storing result: %w", err)
 	}
 	return &servicePb.StoreExecutionResultResponse{}, nil
+}
+
+// runStoppedEarly is the run's failure when the engine or a worker crashed or
+// the connection to it was lost. Trying again can help.
+const runStoppedEarly = "The backtest run stopped early. Try again, or run `fbenv status`."
+
+// runFailureError is what fbull is told when the run stopped before its end.
+// Zipline names a stop it knows the reason for, such as a dividend it didn't
+// pay, with FailedPrecondition and the user's whole sentence; that fails the
+// same way on every run, so it is passed on as written instead of "try again".
+// Anything else gets the fixed sentence: its text can quote a DB URL or stack
+// fragment.
+func runFailureError(err error) error {
+	log.Error().Err(err).Msg("backtest run failed")
+	if engine, ok := engineStatus(err); ok && engine.Code() == codes.FailedPrecondition {
+		return status.Error(codes.FailedPrecondition, engine.Message())
+	}
+	return status.Error(codes.FailedPrecondition, runStoppedEarly)
+}
+
+// engineStatus is the gRPC status the engine answered with, also when err
+// wraps it.
+func engineStatus(err error) (*status.Status, bool) {
+	var engine interface{ GRPCStatus() *status.Status }
+	if !errors.As(err, &engine) {
+		return nil, false
+	}
+	return engine.GRPCStatus(), true
+}
+
+// engineResultErrorTag starts the message of the engine's own failure to read
+// a result. It matches ENGINE_RESULT_ERROR_TAG in client/zipline
+// session_service.py.
+const engineResultErrorTag = "engine result error: "
+
+// getResultError is StoreResult's error when the engine's result couldn't be
+// read. Only the engine's own failure is the fixed report sentence; a lost
+// connection, a cancel or a deadline is returned as it was.
+func getResultError(executionID string, err error) error {
+	if engine, ok := engineStatus(err); ok && engine.Code() == codes.Internal &&
+		strings.HasPrefix(engine.Message(), engineResultErrorTag) {
+		return resultUnreadableError(executionID, err)
+	}
+	return fmt.Errorf("error getting result: %w", err)
+}
+
+// resultUnreadable is the run's failure when the engine couldn't hand over
+// its result, such as an internal check of the dividend book or a metric
+// with no value. Those are foreverbull's bugs, not the algo's.
+const resultUnreadable = "The backtest finished, but foreverbull couldn't read its result. " +
+	"This is a problem in foreverbull, not in your algo. " +
+	"Please report it at https://github.com/lhjnilsson/foreverbull/issues with this message."
+
+// resultUnreadableError logs why the result couldn't be read and returns the
+// fixed sentence: the engine's text can name internal checks and values.
+func resultUnreadableError(executionID string, err error) error {
+	log.Error().Err(err).Str("execution_id", executionID).Msg("error getting result")
+	return status.Error(codes.FailedPrecondition, resultUnreadable)
+}
+
+// returnBasis is what a run's return measures, by its price provider.
+// yahoo and alpaca bars leave dividends out and the run books them as
+// cash: a total return. stooq bars have dividends inside the prices and
+// the run books none: an adjusted-close return.
+func returnBasis(provider string) (backtest.ReturnBasis, error) {
+	switch provider {
+	case "yahoo", "alpaca":
+		return backtest.ReturnBasis_RETURN_BASIS_TOTAL, nil
+	case "stooq":
+		return backtest.ReturnBasis_RETURN_BASIS_ADJUSTED_CLOSE, nil
+	default:
+		return backtest.ReturnBasis_RETURN_BASIS_UNSPECIFIED, fmt.Errorf("execution has no known price provider (%q)", provider)
+	}
 }
 
 func (s *grpcSessionServer) executionForListener(ctx context.Context, executionID string) (*backtest.Execution, error) {
