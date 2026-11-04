@@ -1,6 +1,7 @@
 import logging
 import multiprocessing
 import os
+import sqlite3
 
 from concurrent import futures
 from datetime import date
@@ -17,6 +18,7 @@ import pytest
 from foreverbull_zipline.data_bundles.bundle_alignment import BUNDLE_VERSION_MARKER
 from foreverbull_zipline.data_bundles.bundle_alignment import ensure_session_aligned_bundle
 from foreverbull_zipline.data_bundles.bundle_alignment import latest_ingest_dir
+from foreverbull_zipline.data_bundles.dividends import write_foreign_dividends
 from foreverbull_zipline.data_bundles.foreverbull import SQLIngester
 from foreverbull_zipline.engine import Engine
 from foreverbull_zipline.engine import benchmark_missing_line
@@ -199,6 +201,7 @@ def test_broker(
 
 class _Benchmark:
     symbol = "SPY"
+    sid = 0
 
     def __init__(self, start: str = "2022-12-30"):
         self.start_date = pd.Timestamp(start)
@@ -218,7 +221,8 @@ def test_benchmark_returns_start_on_the_first_session():
         sessions,
         opens=[99.0, 100.0, 102.0, 101.0, 105.0, 106.0],
         closes=[100.0, 102.0, 101.0, 105.0, 106.0, 110.0],
-    )
+        dividends=pd.Series(dtype=float),
+    ).price
 
     assert sessions[0] == pd.Timestamp("2023-01-03")
     assert returns.index[0] == sessions[0]
@@ -236,10 +240,41 @@ def test_benchmark_returns_use_the_previous_close_when_there_is_one():
         sessions,
         opens=[99.0, 100.0, 102.0, 101.0, 105.0, 106.0],
         closes=[100.0, 102.0, 101.0, 105.0, 106.0, 110.0],
-    )
+        dividends=pd.Series(dtype=float),
+    ).price
 
     assert returns.index[0] == sessions[0]
     assert returns.iloc[0] == pytest.approx(102.0 / 100.0 - 1.0)
+
+
+def test_benchmark_total_return_adds_the_dividend_on_its_ex_date():
+    # A $1.00 dividend on 01-05: r = (101 + 1) / 102 - 1 against the price return 101 / 102 - 1.
+    sessions = _sessions("2023-01-04", "2023-01-10")
+    window = _sessions("2023-01-03", "2023-01-10")
+    returns = benchmark_returns(
+        window,
+        sessions,
+        opens=[99.0, 100.0, 102.0, 101.0, 105.0, 106.0],
+        closes=[100.0, 102.0, 101.0, 105.0, 106.0, 110.0],
+        dividends=pd.Series({pd.Timestamp("2023-01-05"): 1.0}),
+    )
+
+    assert returns.price[pd.Timestamp("2023-01-05")] == pytest.approx(101.0 / 102.0 - 1.0)
+    assert returns.total[pd.Timestamp("2023-01-05")] == pytest.approx(102.0 / 102.0 - 1.0)
+    other_days = returns.total.index != pd.Timestamp("2023-01-05")
+    assert list(returns.total[other_days]) == list(returns.price[other_days])
+    assert (1.0 + returns.total).prod() - 1.0 == pytest.approx((110.0 / 100.0) * (102.0 / 101.0) - 1.0)
+
+
+def test_load_benchmark_returns_reads_the_benchmark_dividends():
+    calendar = get_calendar("XNYS")
+    sessions = _sessions("2023-01-03", "2023-01-06")
+    closes = {session: 100.0 for session in _sessions("2022-12-30", "2023-01-06")}
+    bundle = _fake_bundle(calendar, closes, {"2023-01-05": 2.0, "2022-06-01": 9.0})
+
+    returns = load_benchmark_returns("oef-2024q1", bundle, _Benchmark(), calendar, sessions)
+    assert list(returns.price) == [0.0, 0.0, 0.0, 0.0]
+    assert list(returns.total) == pytest.approx([0.0, 0.0, 0.02, 0.0])
 
 
 class _FakeDailyReader:
@@ -255,9 +290,25 @@ class _FakeDailyReader:
         return [closes.copy(), closes.copy()]
 
 
-def _fake_bundle(calendar, closes):
+class _Payouts:
+    """An adjustments database with the benchmark's dividends, by default none."""
+
+    def __init__(self, dividends: dict[str, float] | None = None, sid: int = 0):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.execute("CREATE TABLE dividend_payouts (sid INTEGER, ex_date INTEGER, amount REAL)")
+        self.conn.executemany(
+            "INSERT INTO dividend_payouts VALUES (?, ?, ?)",
+            [
+                (sid, int(cast(pd.Timestamp, pd.Timestamp(day)).timestamp()), amount)
+                for day, amount in (dividends or {}).items()
+            ],
+        )
+
+
+def _fake_bundle(calendar, closes, dividends: dict[str, float] | None = None):
     class _FakeBundle:
         equity_daily_bar_reader = _FakeDailyReader(calendar, closes)
+        adjustment_reader = _Payouts(dividends)
 
     return _FakeBundle()
 
@@ -274,7 +325,9 @@ def test_load_benchmark_returns_aligns_the_reader_to_sessions():
     sessions = _sessions("2023-01-03", "2023-01-06")
     closes = {session: 100.0 + index for index, session in enumerate(_sessions("2022-12-30", "2023-01-06"))}
 
-    returns = load_benchmark_returns("oef-2024q1", _fake_bundle(calendar, closes), _Benchmark(), calendar, sessions)
+    returns = load_benchmark_returns(
+        "oef-2024q1", _fake_bundle(calendar, closes), _Benchmark(), calendar, sessions
+    ).price
     assert returns.index[0] == sessions[0] == pd.Timestamp("2023-01-03")
     assert list(returns.index) == list(sessions)
     assert returns.iloc[0] == pytest.approx(101.0 / 100.0 - 1.0)
@@ -297,11 +350,16 @@ def test_load_benchmark_returns_on_the_first_bundle_session_uses_open_to_close()
 
     class _FakeBundle:
         equity_daily_bar_reader = _OpensBelowCloses(calendar, closes)
+        adjustment_reader = _Payouts({"2023-01-03": 0.5})
 
     returns = load_benchmark_returns("oef-2024q1", _FakeBundle(), _Benchmark("2023-01-03"), calendar, sessions)
-    assert list(returns.index) == list(sessions)
-    assert returns.iloc[0] == pytest.approx((100.0 - 99.0) / 99.0)
-    assert returns.iloc[1] == pytest.approx(101.0 / 100.0 - 1.0)
+    assert list(returns.price.index) == list(sessions)
+    assert returns.price.iloc[0] == pytest.approx((100.0 - 99.0) / 99.0)
+    assert returns.price.iloc[1] == pytest.approx(101.0 / 100.0 - 1.0)
+    # No close before the first session to have held the share at, so its
+    # 0.50 dividend is not in the total return either.
+    assert returns.total.iloc[0] == pytest.approx((100.0 - 99.0) / 99.0)
+    assert list(returns.total.iloc[1:]) == list(returns.price.iloc[1:])
 
 
 def test_load_benchmark_returns_fails_on_sessions_the_bundle_lacks():
@@ -404,7 +462,14 @@ def test_zero_benchmark_returns_stay_on_sessions():
     assert bool((returns == 0.0).all())
 
 
-def _write_e2e_bundle(bundle_name: str, sessions, *, stale: bool, spy_closes: list[float] | None = None) -> None:
+def _write_e2e_bundle(
+    bundle_name: str,
+    sessions,
+    *,
+    stale: bool,
+    spy_closes: list[float] | None = None,
+    before_dividends: bool = False,
+) -> None:
     if spy_closes is None:
         spy_closes = [100.0 + index for index in range(len(sessions))]
     aapl_closes = [50.0 + 0.5 * index for index in range(len(sessions))]
@@ -449,6 +514,8 @@ def _write_e2e_bundle(bundle_name: str, sessions, *, stale: bool, spy_closes: li
         daily_bar_writer.write([(0, _frame(aapl_closes)), (1, _frame(spy_closes))])
         asset_db_writer.write(equities=metadata)
         adjustment_writer.write()
+        if not before_dividends:
+            write_foreign_dividends(adjustment_writer.conn, pd.DataFrame({"sid": [], "ex_date": []}))
 
     bundles.register(bundle_name, ingest_bundle, calendar_name="XNYS")
     bundles.ingest(bundle_name, os.environ, pd.Timestamp("2023-02-01", tz="UTC"), [], False)
@@ -489,7 +556,7 @@ def _run_synthetic_algorithm(bundle_name: str, sessions):
         ),
         metrics_set=metrics.load("default"),
         blotter=load(Blotter, "default"),
-        benchmark_returns=stored_benchmark_returns,
+        benchmark_returns=stored_benchmark_returns.total,
         benchmark_sid=None,
         initialize=initialize,
         handle_data=handle_data,
@@ -543,7 +610,7 @@ def test_load_benchmark_returns_fails_on_a_stored_zero_close_in_a_real_bundle(tm
         assert str(error.value) == _gap_line("1 trading day", f"{sessions[5]:%Y-%m-%d}")
 
         # A later start measures from the previous stored close.
-        returns = load_benchmark_returns("oef-2024q1", bundle, benchmark_asset, calendar, sessions[1:5])
+        returns = load_benchmark_returns("oef-2024q1", bundle, benchmark_asset, calendar, sessions[1:5]).price
         assert returns.iloc[0] == pytest.approx(101.0 / 100.0 - 1.0)
     finally:
         bundles.unregister("e2e_zero_close_bundle")
@@ -616,4 +683,20 @@ def test_a_damaged_version_marker_reaches_the_session_client_as_written(run_stub
     assert error.value.details() == (
         "The price data for backtest 'oef-2024q1' can't be read: its version marker is damaged. "
         "Run `fbull backtest create` again to rebuild it."
+    )
+
+
+def test_a_bundle_from_before_dividends_is_refused(run_stub):
+    # Its returns would leave every dividend out and still be labelled a total return.
+    sessions = _sessions("2023-01-03", "2023-01-31")
+    _write_e2e_bundle("oef-2024q1", sessions, stale=False, before_dividends=True)
+
+    with pytest.raises(grpc.RpcError) as error:
+        run_stub.run_backtest(_run_request("oef-2024q1", "2023-01-04", "2023-01-20"))
+
+    assert error.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+    assert error.value.details() == (
+        "Couldn't run backtest 'oef-2024q1': its data was loaded before dividends were counted, "
+        "so its returns would leave them out. Nothing was run. "
+        "Run `fbull backtest delete oef-2024q1`, then `fbull backtest create` again."
     )
