@@ -1,8 +1,12 @@
+import json
 import os
+import re
 import stat
+import tempfile
 
 from collections.abc import Mapping
 from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 
 import grpc
@@ -14,8 +18,26 @@ _AUTHORIZATION = "authorization"
 _cli_token: ContextVar[str] = ContextVar("foreverbull_cli_token", default="")
 
 
+# A token may cross plaintext gRPC or HTTP only to these hosts. "localhost" is
+# the Kind host port mapping that `fbenv` publishes; anything else needs TLS.
+PLAINTEXT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
 class TokenFileError(Exception):
     """A token file the process must not use. The message is a path, never the secret."""
+
+
+class InsecureTransportError(Exception):
+    """A token would cross a plaintext connection to a host that is not loopback or Kind."""
+
+
+@dataclass(frozen=True)
+class TokenMeta:
+    """What `fbull login` wrote next to the token. It never holds the secret."""
+
+    expires_at: str
+    client: str
+    broker: str
 
 
 class _CallDetails(grpc.ClientCallDetails):
@@ -77,6 +99,10 @@ def token_path(home: Path | None = None) -> Path:
     return home / ".foreverbull" / "token"
 
 
+def token_meta_path(home: Path | None = None) -> Path:
+    return token_path(home).with_name("token.meta")
+
+
 def resolve_token(
     *,
     environ: Mapping[str, str] | None = None,
@@ -91,24 +117,125 @@ def resolve_token(
     env_token = str(environ.get(TOKEN_ENV) or "").strip()
     if env_token:
         return env_token
-    return _read_token_file(token_path(home))
+    return read_token_file(home)
+
+
+def read_token_file(home: Path | None = None) -> str:
+    """The token in ~/.foreverbull/token, or empty when there is no file.
+
+    The directory must be 0700 and the file 0600, both owned by this user.
+    """
+    path = token_path(home)
+    if not path.exists():
+        return ""
+    _check_private(path.parent, 0o700)
+    _check_private(path, 0o600)
+    if not path.is_file():
+        raise TokenFileError(_refused(path, "isn't a regular file", _REMOVE_STEP))
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise TokenFileError(_refused(path, "can't be read", _REMOVE_STEP)) from None
+    return text.strip()
+
+
+def read_token_meta(home: Path | None = None) -> TokenMeta | None:
+    """The sign-in details `fbull login` saved, or None for a token from `fbull token save`."""
+    path = token_meta_path(home)
+    if not path.exists():
+        return None
+    _check_private(path.parent, 0o700)
+    _check_private(path, 0o600)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise TokenFileError(_refused(path, "can't be read", _REMOVE_STEP)) from None
+    if not isinstance(data, dict):
+        raise TokenFileError(_refused(path, "can't be read", _REMOVE_STEP))
+    fields = {}
+    for key in ("expires_at", "client", "broker"):
+        value = data.get(key)
+        if not isinstance(value, str) or not value:
+            raise TokenFileError(_refused(path, f"has no {key}", _REMOVE_STEP))
+        fields[key] = value
+    return TokenMeta(**fields)
 
 
 def save_token_file(raw: str, *, force: bool, home: Path | None = None) -> Path:
-    """Write ~/.foreverbull/token mode 0600. The secret is not an argument and is not logged."""
+    """Write ~/.foreverbull/token mode 0600 in a 0700 directory. The secret is not an argument and is not logged.
+
+    A saved token has no sign-in details, so an old token.meta is removed.
+    """
     token = raw.strip()
     if not token:
         raise TokenFileError("token is empty")
     path = token_path(home)
     if path.exists() and not force:
         raise TokenFileError(f"token file already exists: {path}")
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _private_dir(path.parent)
+    _write_private(path, token)
+    meta = token_meta_path(home)
+    if meta.exists():
+        meta.unlink()
+    return path
+
+
+def save_sign_in(raw: str, meta: TokenMeta, *, home: Path | None = None) -> Path:
+    """Write the token and token.meta from `fbull login`, replacing any earlier token."""
+    token = raw.strip()
+    if not token:
+        raise TokenFileError("token is empty")
+    path = token_path(home)
+    _private_dir(path.parent)
+    # The meta goes first: a token without meta would read as a non-expiring saved token.
+    _write_private(
+        token_meta_path(home),
+        json.dumps({"expires_at": meta.expires_at, "client": meta.client, "broker": meta.broker}),
+    )
+    _write_private(path, token)
+    return path
+
+
+def delete_token_files(home: Path | None = None) -> Path:
+    """Remove the token and token.meta. Returns the token path."""
+    path = token_path(home)
+    for target in (path, token_meta_path(home)):
+        if target.exists():
+            target.unlink()
+    return path
+
+
+def check_plaintext_host(host: str) -> None:
+    """Refuse to send a credential over a plaintext connection to a host that is not loopback or Kind."""
+    cleaned = host.strip().strip("[]").lower()
+    if cleaned in PLAINTEXT_HOSTS:
+        return
+    raise InsecureTransportError(
+        f"fbull won't send your token to {host} without encryption. "
+        "Use an https:// address, or, for a local install, 127.0.0.1 or localhost."
+    )
+
+
+def _private_dir(directory: Path) -> None:
+    """Create the token directory at 0700, or make an existing one 0700. Another owner is refused."""
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise TokenFileError(_refused(directory, "isn't a directory", _REMOVE_STEP))
+    if info.st_uid != os.getuid():
+        raise TokenFileError(_refused(directory, "belongs to another user", _REMOVE_STEP))
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        os.chmod(directory, 0o700)
+
+
+def _write_private(path: Path, text: str) -> None:
     # Write a new file at 0600, then replace. Truncating the old inode would
     # leave the secret readable for a moment when --force meets mode 0644.
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(name)
     try:
-        os.write(fd, token.encode("utf-8"))
+        os.write(fd, text.encode("utf-8"))
+        os.fsync(fd)
     except Exception:
         os.close(fd)
         os.unlink(tmp)
@@ -117,16 +244,55 @@ def save_token_file(raw: str, *, force: bool, home: Path | None = None) -> Path:
         os.close(fd)
     os.chmod(tmp, 0o600)
     os.replace(tmp, path)
-    return path
+
+
+_REMOVE_STEP = "Remove it, then run `fbull login`."
+
+
+def _refused(path: Path, problem: str, step: str) -> str:
+    return f"fbull won't use the token: {path} {problem}. {step}"
+
+
+def _check_private(path: Path, mode: int) -> None:
+    """Refuse a path that is a symlink, has group or other bits, or belongs to another user."""
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode):
+        raise TokenFileError(_refused(path, "is a symlink", "Remove the link, then run `fbull login`."))
+    if info.st_uid != os.getuid():
+        raise TokenFileError(_refused(path, "belongs to another user", _REMOVE_STEP))
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        raise TokenFileError(_refused(path, "must be readable only by you", f"Run `chmod {mode:o} {path}`."))
 
 
 def broker_channel(address: str) -> grpc.Channel:
-    """Broker channel. No metadata when no token is configured, so authentication-off calls stay open."""
-    channel = grpc.insecure_channel(address)
+    """Broker channel. No metadata when no token is configured, so authentication-off calls stay open.
+
+    The channel is plaintext, so a token is sent only to 127.0.0.1 or the Kind host.
+    """
     token = resolve_token()
     if not token:
-        return channel
+        return grpc.insecure_channel(address)
+    check_plaintext_host(_address_host(address))
+    channel = grpc.insecure_channel(address)
     return grpc.intercept_channel(channel, _MetadataInterceptor(((_AUTHORIZATION, f"Bearer {token}"),)))
+
+
+# host, host:port, [v6], or [v6]:port, and nothing else.
+_HOST_PORT = re.compile(
+    r"(?:\[(?P<v6>[0-9A-Fa-f:.]+)\]|(?P<host>[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?))(?::(?P<port>[0-9]{1,5}))?"
+)
+
+
+def _address_host(address: str) -> str:
+    """The host of a gRPC host:port address. Anything else, such as user info or a path, is refused."""
+    match = _HOST_PORT.fullmatch(address.strip())
+    port = match and match.group("port")
+    if match is None or (port is not None and not 0 < int(port) < 65536):
+        raise InsecureTransportError(
+            f"fbull won't send your token to `{address}` because it isn't a host:port address. "
+            "Set FOREVERBULL_BROKER_ADDRESS or remote.broker_address to host:port, for example 127.0.0.1:50055."
+        )
+    return match.group("v6") or match.group("host")
 
 
 def session_channel(address: str, secret: str) -> grpc.Channel:
@@ -136,16 +302,3 @@ def session_channel(address: str, secret: str) -> grpc.Channel:
     if not cleaned:
         return channel
     return grpc.intercept_channel(channel, _MetadataInterceptor(((SESSION_METADATA, cleaned),)))
-
-
-def _read_token_file(path: Path) -> str:
-    if not path.is_file():
-        return ""
-    mode = stat.S_IMODE(path.stat().st_mode)
-    if mode & 0o077:
-        raise TokenFileError(f"token file mode must be 0600: {path}")
-    try:
-        text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        raise TokenFileError(f"token file cannot be read: {path}") from None
-    return text.strip()
