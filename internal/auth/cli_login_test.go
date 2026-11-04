@@ -647,3 +647,37 @@ func TestCLIRevokeOfAnExpiredTokenNamesFbullLogin(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 	require.Contains(t, rec.Body.String(), "Your sign-in has expired. Run `fbull login` to sign in again.")
 }
+
+func TestSweepDropsExpiredCLICodesAndTokens(t *testing.T) {
+	t.Setenv(environment.AuthEnabled, "true")
+	pool := newAuthDB(t)
+	ctx := context.Background()
+	require.NoError(t, Migrate(ctx, pool))
+	now := time.Now()
+	_, live := issueTestCLIToken(t, pool, "cli-sweep-live", RoleEditor, now)
+	// Just expired: kept, so its owner still reads "Your sign-in expired".
+	_, recent := issueTestCLIToken(t, pool, "cli-sweep-recent", RoleEditor, now.Add(-cliTokenLifetime))
+	_, old := issueTestCLIToken(t, pool, "cli-sweep-old", RoleEditor, now.Add(-cliTokenLifetime-expiredTokenRetention))
+	_, idle := issueTestCLIToken(t, pool, "cli-sweep-idle", RoleEditor, now.Add(-cliTokenIdle-expiredTokenRetention))
+	id, err := CreateEditor(ctx, pool, "cli-sweep-code", "twelve-chars")
+	require.NoError(t, err)
+	_, challenge := testVerifier("v")
+	req, err := ParseCLIRequest(cliValues(challenge))
+	require.NoError(t, err)
+	_, err = IssueCLICode(ctx, pool, Account{ID: id, Role: RoleEditor}, req, now)
+	require.NoError(t, err)
+
+	sweepExpired(ctx, pool, now.Add(cliCodeTTL), nil)
+
+	var codes int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM cli_auth_code`).Scan(&codes))
+	require.Zero(t, codes)
+	for _, tc := range []struct {
+		token CLIToken
+		left  int
+	}{{live, 1}, {recent, 1}, {old, 0}, {idle, 0}} {
+		var count int
+		require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM api_token WHERE id = $1`, tc.token.ID).Scan(&count))
+		require.Equal(t, tc.left, count, tc.token.ID)
+	}
+}
