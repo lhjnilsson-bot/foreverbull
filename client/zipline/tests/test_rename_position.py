@@ -14,6 +14,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
+from foreverbull_zipline.data_bundles.dividends import no_dividends
 from foreverbull_zipline.data_bundles.foreverbull import SQLIngester
 from foreverbull_zipline.engine import Engine
 from foreverbull_zipline.engine import zero_benchmark_returns
@@ -114,6 +115,7 @@ def rename_bundle(tmp_path, monkeypatch):
             engine=engine,
             aliases=aliases,
             events=pd.DataFrame(columns=pd.Index(["symbol", "kind", "on_date", "evidence"])),
+            dividends=no_dividends(),
         ),
         calendar_name="XNYS",
     )

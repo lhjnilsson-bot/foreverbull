@@ -17,6 +17,7 @@ from typing import cast
 import pandas as pd
 import pytest
 
+from foreverbull_zipline.data_bundles.dividends import no_dividends
 from foreverbull_zipline.data_bundles.foreverbull import SQLIngester
 from foreverbull_zipline.engine import zero_benchmark_returns
 from zipline.data import bundles
@@ -126,6 +127,7 @@ def _ingester(sessions: pd.DatetimeIndex, xyz_intervals: list[tuple[date, date |
         engine=engine,
         aliases=_aliases(xyz_intervals),
         events=pd.DataFrame(columns=pd.Index(["symbol", "kind", "on_date", "evidence"])),
+        dividends=no_dividends(),
     )
 
 

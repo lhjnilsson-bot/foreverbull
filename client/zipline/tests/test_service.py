@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from foreverbull_zipline import service
+from foreverbull_zipline.data_bundles.dividends import no_dividends
 from foreverbull_zipline.data_bundles.foreverbull import SQLIngester
 from sqlalchemy import create_engine
 from zipline.data import bundles
@@ -297,7 +298,9 @@ class TestIngestRefusalReachesTheBrokerAsWritten:
             }
         )
         monkeypatch.setattr(
-            service, "SQLIngester", lambda backtest: SQLIngester(backtest, engine=_NoBars(), aliases=rename)
+            service,
+            "SQLIngester",
+            lambda backtest: SQLIngester(backtest, engine=_NoBars(), aliases=rename, dividends=no_dividends()),
         )
 
         with pytest.raises(grpc.RpcError) as error:
@@ -312,7 +315,11 @@ class TestIngestRefusalReachesTheBrokerAsWritten:
         )
 
     def test_ticker_history_cant_be_read(self, ingest_stub, monkeypatch):
-        monkeypatch.setattr(service, "SQLIngester", lambda backtest: SQLIngester(backtest, engine=_NoTickerHistory()))
+        monkeypatch.setattr(
+            service,
+            "SQLIngester",
+            lambda backtest: SQLIngester(backtest, engine=_NoTickerHistory(), dividends=no_dividends()),
+        )
 
         with pytest.raises(grpc.RpcError) as error:
             ingest_stub.ingest(engine_service_pb.IngestRequest(backtest=_quarter_backtest()))
