@@ -299,9 +299,17 @@ function RunReport({
   const periods = detail.state === "ready" && Array.isArray(detail.data.periods) ? detail.data.periods : [];
   const points = portfolioSeries(periods);
   const provider = detail.state === "ready" ? (detail.data.provider ?? "") : "";
+  // The run's basis comes with the stored execution, not the list row.
+  const storedExecution = detail.state === "ready" ? detail.data.execution : undefined;
   // Only the GET periods carry the first open and every session's positions,
   // so the list row's last result never stands in for the card.
-  const card = resultCard({ stored: periods.filter(hasStoredDate), benchmark, provider });
+  const card = resultCard({
+    stored: periods.filter(hasStoredDate),
+    benchmark,
+    provider,
+    returnBasis: storedExecution?.returnBasis,
+    foreignDividendsGross: storedExecution?.foreignDividendsGross,
+  });
   const id = execution.id ?? "";
 
   return (
@@ -355,6 +363,13 @@ function ResultCardView({ card }: { card: ResultCard }) {
           )),
         )}
       </dl>
+      {card.notes ? (
+        <div className="text-muted-foreground">
+          {card.notes.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+        </div>
+      ) : null}
       {card.noTrades ? (
         <div className="text-muted-foreground">
           {card.noTrades.map((line) => (
