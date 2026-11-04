@@ -2,6 +2,7 @@ import { type FormEvent, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { showTokenMint, canGrant, type Me } from "./access";
 import { useAuth } from "./auth-context";
+import { codeSpans, signOutEverywhereCopy } from "./signout";
 import { Detail, DetailHeading, Field, FormError, H2, buttonClass, inputClass } from "./components/fb";
 import { deleteJson, postJson, putJson, useJson } from "./useJson";
 
@@ -143,6 +144,56 @@ export function LogoutButton() {
   );
 }
 
+// Revokes every token (CLI sign-ins and saved tokens) and every browser
+// session of the account, this one included. It asks first.
+function SignOutEverywhereButton() {
+  const { signedOut } = useAuth();
+  const [confirming, setConfirming] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const copy = signOutEverywhereCopy;
+
+  async function onConfirm() {
+    if (pending) return;
+    setPending(true);
+    setError("");
+    const result = await postJson("/api/auth/revoke-all", {});
+    setPending(false);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    signedOut();
+  }
+
+  if (!confirming) {
+    return (
+      <button type="button" className={buttonClass} onClick={() => setConfirming(true)}>
+        {copy.button}
+      </button>
+    );
+  }
+  return (
+    <div role="alertdialog" aria-labelledby="sign-out-everywhere-question" className="flex flex-col gap-2">
+      <p id="sign-out-everywhere-question" className="font-medium">
+        {copy.question}
+      </p>
+      <p className="text-muted-foreground">
+        {codeSpans(copy.detail).map((piece) => (piece.code ? <code key={piece.text}>{piece.text}</code> : piece.text))}
+      </p>
+      <div className="flex gap-2">
+        <button type="button" className={buttonClass} disabled={pending} onClick={() => void onConfirm()}>
+          {copy.confirm}
+        </button>
+        <button type="button" className={buttonClass} disabled={pending} onClick={() => setConfirming(false)}>
+          {copy.cancel}
+        </button>
+      </div>
+      <FormError message={error} />
+    </div>
+  );
+}
+
 export function AccountPage() {
   const { state } = useAuth();
   if (state.status !== "in") {
@@ -160,8 +211,9 @@ export function AccountPage() {
         <Field label="Role">{account.role}</Field>
         <Field label="Login">{account.login}</Field>
       </dl>
-      <div className="mt-6">
+      <div className="mt-6 flex gap-4">
         <LogoutButton />
+        <SignOutEverywhereButton />
       </div>
       {showTokenMint(account) ? <TokenPanel /> : null}
     </Detail>
