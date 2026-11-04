@@ -786,6 +786,12 @@ func DownloadFinancialData(ctx context.Context, msg stream.Message) error {
 			return discardFailedBacktest(ctx, backtests, command.BacktestName, backtestID, err)
 		}
 		if msg.GetStatus() == financeServicePB.DownloadHistoricalDataResponse_STATUS_ERROR {
+			var dividendFetch *financeapi.DividendFetchError
+			if errors.As(financeapi.DividendFailure(msg), &dividendFetch) {
+				downloads = append(downloads, downloadMiss{symbol: msg.GetSymbol(), cause: dividendFetch, dividends: true})
+				progress.symbolDone()
+				continue
+			}
 			var barsStatus *financeapi.BarsStatusError
 			if errors.As(financeapi.DownloadFailure(msg), &barsStatus) {
 				downloads = append(downloads, downloadMiss{symbol: msg.GetSymbol(), cause: barsStatus})

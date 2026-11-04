@@ -33,7 +33,7 @@ func (test *IngestCommandTest) TestIngestCancelStopsTheFetch() {
 
 	message := new(stream.MockMessage)
 	message.On("MustGet", stream.DBDep).Return(test.db)
-	message.On("MustGet", dependency.MarketDataDep).Return(test.marketdata)
+	message.On("MustGet", dependency.MarketDataDep).Return(dividendFree{test.marketdata})
 	message.On("ParsePayload", &fs.IngestCommand{}).Return(nil).Run(func(args mock.Arguments) {
 		payload := args.Get(0).(*fs.IngestCommand)
 		payload.Provider = "yahoo"
