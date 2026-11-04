@@ -137,6 +137,40 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql`
 
+// accountRoleDowngradeFunction revokes every token and session of an account
+// whose role moves down. Roles change in SQL, so the trigger is the one place
+// that sees every downgrade.
+const accountRoleDowngradeFunction = `
+CREATE OR REPLACE FUNCTION account_role_rank(role text) RETURNS int AS $$
+	SELECT CASE role
+		WHEN 'none' THEN 0
+		WHEN 'pending' THEN 1
+		WHEN 'viewer' THEN 2
+		WHEN 'editor' THEN 3
+		WHEN 'admin' THEN 4
+	END
+$$ LANGUAGE sql IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION account_role_downgrade() RETURNS trigger AS $$
+BEGIN
+	IF account_role_rank(NEW.role) < account_role_rank(OLD.role) THEN
+		UPDATE api_token SET revoked_at = now()
+		WHERE account_id = NEW.id AND revoked_at IS NULL;
+		UPDATE browser_session SET revoked_at = now()
+		WHERE account_id = NEW.id AND revoked_at IS NULL;
+	END IF;
+	RETURN NEW;
+END;
+$$ LANGUAGE plpgsql`
+
+const accountRoleDowngradeTrigger = `
+DO $$ BEGIN
+	CREATE TRIGGER account_role_downgrade
+	AFTER UPDATE OF role ON account
+	FOR EACH ROW EXECUTE PROCEDURE account_role_downgrade();
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$`
+
 // Migrate creates the auth tables. Once service, backtest, or strategy uses
 // id as its primary key, it installs a delete trigger that removes that row's
 // domain_grant entries. It does not assign owners and it does not change
@@ -175,6 +209,8 @@ func Migrate(ctx context.Context, conn postgres.Query) error {
 		{"oauth_state_expires_at_idx", oauthStateExpiresIndex},
 		{"domain_grant_grantee_id_domain_kind_idx", domainGrantGranteeIndex},
 		{"domain_grant_before_delete", domainGrantDeleteFunction},
+		{"account_role_downgrade", accountRoleDowngradeFunction},
+		{"account_role_downgrade_trigger", accountRoleDowngradeTrigger},
 	}
 	for _, statement := range statements {
 		if _, err := conn.Exec(ctx, statement.sql); err != nil {
