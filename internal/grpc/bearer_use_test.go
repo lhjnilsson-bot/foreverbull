@@ -40,7 +40,8 @@ func (tokenDB) Query(context.Context, string, ...any) (pgx.Rows, error) {
 }
 
 func (tokenDB) QueryRow(context.Context, string, ...any) pgx.Row {
-	return tokenRow{"acc-1", auth.RoleEditor, auth.ScopeWrite, "tok-1", nil, nil}
+	// id, role, scope, token id, client, created_at, last_used_at, revoked_at, expires_at
+	return tokenRow{"acc-1", auth.RoleEditor, auth.ScopeWrite, "tok-1", nil, nil, nil, nil, nil}
 }
 
 func (tokenDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {

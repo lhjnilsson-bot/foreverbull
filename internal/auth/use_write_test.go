@@ -54,7 +54,8 @@ func TestAccountUseWriteFails(t *testing.T) {
 	broken := errors.New("connection lost")
 
 	t.Run("bearer token use", func(t *testing.T) {
-		db := rowDB{values: []any{"acc-1", RoleEditor, ScopeWrite, "tok-1", nil, nil}, execErr: broken}
+		// id, role, scope, token id, client, created_at, last_used_at, revoked_at, expires_at
+		db := rowDB{values: []any{"acc-1", RoleEditor, ScopeWrite, "tok-1", nil, nil, nil, nil, nil}, execErr: broken}
 		_, err := AccountFromBearer(ctx, db, tokenPrefix+"secret", now)
 		require.ErrorIs(t, err, broken)
 		require.ErrorIs(t, err, ErrUseNotRecorded)
