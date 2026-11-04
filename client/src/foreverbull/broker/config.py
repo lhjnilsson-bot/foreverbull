@@ -11,6 +11,10 @@ import yaml
 DEFAULT_BROKER_ADDRESS = "localhost:50055"
 DEFAULT_BROKER_PORT = 50055
 BROKER_ADDRESS_ENV = "FOREVERBULL_BROKER_ADDRESS"
+# The broker's HTTP origin, where `fbull login` opens the browser. Kind
+# publishes the broker's HTTP port on localhost:8080.
+DEFAULT_BROKER_URL = "http://localhost:8080"
+BROKER_URL_ENV = "FOREVERBULL_BROKER_URL"
 DEFAULT_NAMESPACE = "foreverbull"
 DEFAULT_KIND_NAME = "foreverbull"
 DEFAULT_KIND_CONFIG = "deploy/kind/cluster.yaml"
@@ -27,6 +31,7 @@ DEFAULT_CLUSTER_CONFIG: dict[str, Any] = {
         "context": "",
         "namespace": "",
         "broker_address": "",
+        "broker_url": "",
     },
 }
 
@@ -127,6 +132,29 @@ def resolve_broker_address(
             f"set it in .foreverbull/config.yaml or {BROKER_ADDRESS_ENV}"
         )
     return addr
+
+
+def resolve_broker_url(
+    *,
+    cwd: Path | None = None,
+    home: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> str:
+    """The broker's HTTP origin: FOREVERBULL_BROKER_URL, then Kind's localhost:8080, then remote.broker_url."""
+    environ = os.environ if environ is None else environ
+    env_url = str(environ.get(BROKER_URL_ENV) or "").strip()
+    if env_url:
+        return env_url.rstrip("/")
+    data = load_cluster_config(cwd=cwd, home=home, environ=environ)
+    if str(data.get("cluster") or "local") == "local":
+        return DEFAULT_BROKER_URL
+    url = str((data.get("remote") or {}).get("broker_url") or "").strip()
+    if not url:
+        raise ValueError(
+            "cluster is remote but remote.broker_url is not set; "
+            f"set it in .foreverbull/config.yaml or {BROKER_URL_ENV}"
+        )
+    return url.rstrip("/")
 
 
 def broker_host_port(
