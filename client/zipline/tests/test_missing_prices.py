@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from foreverbull_zipline.data_bundles.dividends import no_dividends
 from foreverbull_zipline.data_bundles.foreverbull import MissingSessionsError
 from foreverbull_zipline.data_bundles.foreverbull import SQLIngester
 from foreverbull_zipline.data_bundles.foreverbull import drop_unpriced_bars
@@ -96,6 +97,7 @@ def _ingest(name: str, frames: dict[str, pd.DataFrame]) -> tuple[Any, SQLIngeste
         engine=OHLCRows(frames),
         aliases=pd.DataFrame(),
         events=pd.DataFrame(columns=pd.Index(["symbol", "kind", "on_date", "evidence"])),
+        dividends=no_dividends(),
     )
     bundles.register(name, ingester, calendar_name="XNYS")
     try:

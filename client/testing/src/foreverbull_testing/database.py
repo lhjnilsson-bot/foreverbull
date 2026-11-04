@@ -4,6 +4,7 @@ from datetime import timedelta
 import yfinance
 import yfinance.data
 
+from sqlalchemy import Boolean
 from sqlalchemy import Column
 from sqlalchemy import Date
 from sqlalchemy import DateTime
@@ -71,6 +72,68 @@ class UniverseMember(Base):
     isin = Column(String(), primary_key=True)
     from_date = Column(Date(), primary_key=True)
     to_date = Column(Date())
+
+
+class Dividend(Base):
+    """The broker's cash dividends (pkg/finance), without its checks."""
+
+    __tablename__ = "dividend"
+    provider = Column(String(), primary_key=True)
+    symbol = Column(String(), primary_key=True)
+    ex_date = Column(Date(), primary_key=True)
+    pay_date = Column(Date())
+    record_date = Column(Date())
+    declared_date = Column(Date())
+    amount = Column(Numeric(), nullable=False)
+    currency = Column(String(), nullable=False, server_default="USD")
+    is_foreign = Column(Boolean(), nullable=False, server_default="false")
+
+
+class DividendFetch(Base):
+    """The span of stored bars whose dividends the broker fetched.
+
+    Ingest refuses bars outside it, so every symbol a test stores bars for
+    needs a row.
+    """
+
+    __tablename__ = "dividend_fetch"
+    provider = Column(String(), primary_key=True)
+    symbol = Column(String(), primary_key=True)
+    first_date = Column(Date(), nullable=False)
+    last_date = Column(Date(), nullable=False)
+
+
+class CorporateAction(Base):
+    """The actions a backtest can't book that the broker stored, without its checks.
+
+    Ingest fails a backtest whose window holds one, so a test database needs
+    the table even when it holds no rows.
+    """
+
+    __tablename__ = "corporate_action"
+    provider = Column(String(), primary_key=True)
+    symbol = Column(String(), primary_key=True)
+    kind = Column(String(), primary_key=True)
+    ex_date = Column(Date(), primary_key=True)
+
+
+def record_dividend_fetch(conn, provider: str, symbol: str) -> None:
+    """Mark a symbol's stored bars as fetched with no cash dividends.
+
+    The bars tests store are Yahoo's dividend-adjusted closes, so the
+    dividends are inside the prices and booking them as cash would count
+    them twice.
+    """
+    conn.execute(
+        text(
+            """INSERT INTO dividend_fetch (provider, symbol, first_date, last_date)
+            SELECT provider, symbol, min(time)::date, max(time)::date FROM ohlc
+            WHERE provider = :provider AND symbol = :symbol GROUP BY provider, symbol
+            ON CONFLICT (provider, symbol) DO UPDATE SET
+                first_date = EXCLUDED.first_date, last_date = EXCLUDED.last_date"""
+        ),
+        {"provider": provider, "symbol": symbol},
+    )
 
 
 _OHLC_PROVIDER_COLUMN = text("ALTER TABLE ohlc ADD COLUMN IF NOT EXISTS provider text NOT NULL DEFAULT 'yahoo'")
@@ -258,4 +321,5 @@ def populate(database: engine.Engine, backtest: backtest_pb.Backtest):
                         "time": time,
                     },
                 )
+            record_dividend_fetch(conn, provider, asset.symbol)
             conn.commit()
