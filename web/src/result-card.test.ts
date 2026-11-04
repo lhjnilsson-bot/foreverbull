@@ -182,3 +182,65 @@ test("formatting matches the CLI helpers", () => {
   assert.equal(formatUsd(0), "$0.00");
   assert.equal(formatUsd(-12.3), "-$12.30");
 });
+
+test("a total-return run shows total and price return with the CLI labels", () => {
+  const first = period(2, { startingCash: 100_000, portfolioValue: 100_000 });
+  const last = period(4, {
+    portfolioValue: 112_812.4,
+    algorithmPeriodReturn: 0.128124,
+    priceReturn: 0.111963,
+    maxDrawdown: -0.05,
+    sharpe: 1.2,
+    sortino: 1.0,
+    benchmarkPeriodReturn: 0.0912,
+    benchmarkPriceReturn: 0.0805,
+    longsCount: 1,
+  });
+  const load = resultCard({
+    stored: [first, last],
+    benchmark: "SPY",
+    provider: "yahoo",
+    returnBasis: "RETURN_BASIS_TOTAL",
+    foreignDividendsGross: 2,
+  });
+  assert.deepEqual(cells(load), [
+    ["Start=$100,000.00", "End=$112,812.40"],
+    ["Total return=+12.8%", "Benchmark (SPY) total=+9.1%"],
+    ["Price return=+11.2%", "Benchmark (SPY) price=+8.1%"],
+    ["Data source=yahoo"],
+    ["Sharpe=1.20", "Sortino=1.00"],
+    ["Max drawdown=-5.0%", "Active days=1 of 2"],
+  ]);
+  assert.ok(load?.ok);
+  assert.deepEqual(load.card.notes, [
+    "Dividends paid on the ex-date: the cash lands then, not on the pay date.",
+    "2 foreign dividends booked gross, before withholding.",
+  ]);
+});
+
+test("an adjusted-close run labels the return and notes dividends inside prices", () => {
+  const first = period(2, { startingCash: 100_000, portfolioValue: 100_000 });
+  const last = period(4, {
+    portfolioValue: 110_000,
+    algorithmPeriodReturn: 0.1,
+    maxDrawdown: -0.02,
+    longsCount: 1,
+  });
+  const load = resultCard({
+    stored: [first, last],
+    benchmark: "SPY",
+    provider: "stooq",
+    returnBasis: "RETURN_BASIS_ADJUSTED_CLOSE",
+  });
+  assert.deepEqual(cells(load), [
+    ["Start=$100,000.00", "End=$110,000.00"],
+    ["Adjusted-close return=+10.0%", "Benchmark (SPY)=not available"],
+    ["Data source=stooq"],
+    ["Sharpe=-", "Sortino=-"],
+    ["Max drawdown=-2.0%", "Active days=1 of 2"],
+  ]);
+  assert.ok(load?.ok);
+  assert.deepEqual(load.card.notes, [
+    "Adjusted-close return (dividends inside prices): no dividends were booked as cash.",
+  ]);
+});
