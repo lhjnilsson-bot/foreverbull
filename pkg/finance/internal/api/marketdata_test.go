@@ -69,7 +69,7 @@ func (suite *MarketdataTest) SetupTest() {
 	suite.listener = bufconn.Listen(1024 * 1024)
 	suite.server, err = internalGrpc.NewServer()
 	suite.Require().NoError(err)
-	server := api.NewMarketdataServer(suite.pgx, suite.marketdata)
+	server := api.NewMarketdataServer(suite.pgx, dividendFree{suite.marketdata})
 	servicePb.RegisterMarketdataServer(suite.server, server)
 
 	// Serve gets this test's server and listener, not the suite fields the

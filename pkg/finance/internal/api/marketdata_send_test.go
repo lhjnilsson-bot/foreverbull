@@ -89,7 +89,7 @@ func TestDownloadHistoricalDataStopsAfterSendFails(t *testing.T) {
 		symbols = append(symbols, fmt.Sprintf("SYM%03d", i))
 	}
 	stream := &failingStream{}
-	server := NewMarketdataServer(nil, md)
+	server := NewMarketdataServer(nil, dividendFree{md})
 	err := server.DownloadHistoricalData(&servicePb.DownloadHistoricalDataRequest{
 		Symbols:   symbols,
 		StartDate: &internal_pb.Date{Year: 2026, Month: 5, Day: 1},

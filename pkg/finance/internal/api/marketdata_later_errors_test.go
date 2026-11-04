@@ -232,7 +232,7 @@ func TestDownloadSymbolLooksUpLaterTickerOnlyOnNoBars(t *testing.T) {
 			start := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
 			end := time.Date(2020, 12, 31, 0, 0, 0, 0, time.UTC)
 			blocked := fs.downloadSymbol(ctx, newDownloadSender(stream, func() {}), "FB", start, &end, tc.provider,
-				repository.Asset{Conn: pool}, repository.OHLC{Conn: pool}, bars)
+				repository.Asset{Conn: pool}, repository.OHLC{Conn: pool}, dividendFree{bars})
 
 			if tc.wantBlock {
 				require.Equal(t, &marketdata.BlockedError{Provider: "yahoo", Symbol: "FB"}, blocked)

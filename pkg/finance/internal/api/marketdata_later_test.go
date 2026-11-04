@@ -37,7 +37,7 @@ func TestFetchBarsViaLaterTickerReturnsContextErrorWhenCancelled(t *testing.T) {
 
 	md := supplier.NewMockMarketdata(t)
 	md.On("SearchAsset", mock.Anything, isin).Return([]*pb.Asset{{Symbol: "META", ISIN: isin}}, nil)
-	fs := NewMarketdataServer(pool, md)
+	fs := NewMarketdataServer(pool, dividendFree{md})
 
 	start := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2020, 12, 31, 0, 0, 0, 0, time.UTC)

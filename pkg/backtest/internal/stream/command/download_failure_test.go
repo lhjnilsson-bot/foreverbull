@@ -11,7 +11,11 @@ import (
 )
 
 func barsFailed(symbol string, status int) downloadMiss {
-	return downloadMiss{symbol: symbol, cause: &financeapi.BarsStatusError{Provider: "alpaca", Symbol: symbol, Status: status}}
+	return barsFailedFrom("alpaca", symbol, status)
+}
+
+func barsFailedFrom(provider, symbol string, status int) downloadMiss {
+	return downloadMiss{symbol: symbol, cause: &financeapi.BarsStatusError{Provider: provider, Symbol: symbol, Status: status}}
 }
 
 const issuesStep = " If it keeps happening, please report it at https://github.com/lhjnilsson/foreverbull/issues with this message."
@@ -104,4 +108,37 @@ func TestMixedFailures(t *testing.T) {
 	require.True(t, mixedFailures(1, 0, 1))
 	require.True(t, mixedFailures(0, 1, 1))
 	require.True(t, mixedFailures(1, 1, 0))
+}
+
+func dividendsFailed(symbol string, kind financeapi.DividendFetchKind, status int) downloadMiss {
+	return downloadMiss{symbol: symbol, dividends: true,
+		cause: &financeapi.DividendFetchError{Provider: "yahoo", Symbol: symbol, Kind: kind, Status: status}}
+}
+
+// A failed dividend download is collected and worded like a failed price
+// download, with the same step.
+func TestDownloadFailureMessageNamesDividends(t *testing.T) {
+	t.Parallel()
+	err := plainSentence(downloadFailureMessage("oef-2024q1", "yahoo",
+		[]downloadMiss{dividendsFailed("KO", financeapi.DividendHTTPStatus, http.StatusServiceUnavailable)}, true))
+	require.EqualError(t, err, "Couldn't load data for backtest 'oef-2024q1': foreverbull couldn't download dividends for "+
+		"KO from yahoo: yahoo had a server error (HTTP 503). The backtest wasn't saved. "+
+		"Run `fbull backtest create` again in a few minutes, or try another provider with --provider.")
+
+	err = plainSentence(downloadFailureMessage("oef-2024q1", "yahoo",
+		[]downloadMiss{dividendsFailed("KO", financeapi.DividendNoAnswer, 0), dividendsFailed("PEP", financeapi.DividendUnreadable, 0)}, true))
+	require.EqualError(t, err, "Couldn't load data for backtest 'oef-2024q1': foreverbull couldn't download dividends for "+
+		"2 symbols from yahoo. The backtest wasn't saved.\n"+
+		"  KO: yahoo didn't answer.\n"+
+		"  PEP: yahoo's answer couldn't be read.\n"+
+		"Check your internet connection, then run `fbull backtest create` again. "+
+		"Try another provider with --provider, then run `fbull backtest create` again."+issuesStep)
+
+	err = plainSentence(downloadFailureMessage("oef-2024q1", "yahoo",
+		[]downloadMiss{barsFailedFrom("yahoo", "XYZ", http.StatusServiceUnavailable), dividendsFailed("KO", financeapi.DividendHTTPStatus, http.StatusServiceUnavailable)}, true))
+	require.EqualError(t, err, "Couldn't load data for backtest 'oef-2024q1': foreverbull couldn't download prices or dividends for "+
+		"2 symbols from yahoo. The backtest wasn't saved.\n"+
+		"  XYZ: couldn't download prices: yahoo had a server error (HTTP 503).\n"+
+		"  KO: couldn't download dividends: yahoo had a server error (HTTP 503).\n"+
+		"Run `fbull backtest create` again in a few minutes, or try another provider with --provider.")
 }
