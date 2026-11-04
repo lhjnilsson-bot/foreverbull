@@ -14,6 +14,18 @@ func Recreate(ctx context.Context, conn *pgxpool.Pool) error {
 		return fmt.Errorf("failed to drop trading_calendar_date table: %w", err)
 	}
 
+	if _, err := conn.Exec(ctx, `DROP TABLE IF EXISTS corporate_action`); err != nil {
+		return fmt.Errorf("failed to drop corporate_action table: %w", err)
+	}
+
+	if _, err := conn.Exec(ctx, `DROP TABLE IF EXISTS dividend_fetch`); err != nil {
+		return fmt.Errorf("failed to drop dividend_fetch table: %w", err)
+	}
+
+	if _, err := conn.Exec(ctx, `DROP TABLE IF EXISTS dividend`); err != nil {
+		return fmt.Errorf("failed to drop dividend table: %w", err)
+	}
+
 	if _, err := conn.Exec(ctx, `DROP TABLE IF EXISTS ohlc`); err != nil {
 		return fmt.Errorf("failed to drop ohlc table: %w", err)
 	}
@@ -62,6 +74,10 @@ func Recreate(ctx context.Context, conn *pgxpool.Pool) error {
 		return err
 	}
 
+	if _, err := conn.Exec(ctx, DividendTable); err != nil {
+		return fmt.Errorf("failed to create dividend table: %w", err)
+	}
+
 	if _, err := conn.Exec(ctx, TradingTable); err != nil {
 		return fmt.Errorf("failed to create trading table: %w", err)
 	}
@@ -100,6 +116,10 @@ func CreateTables(ctx context.Context, conn *pgxpool.Pool) error {
 
 	if err := migrateFinanceSchema(ctx, conn); err != nil {
 		return err
+	}
+
+	if _, err := conn.Exec(ctx, DividendTable); err != nil {
+		return fmt.Errorf("failed to create dividend table: %w", err)
 	}
 
 	if _, err := conn.Exec(ctx, TradingTable); err != nil {
