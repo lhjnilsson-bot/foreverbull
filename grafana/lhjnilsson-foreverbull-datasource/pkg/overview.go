@@ -31,6 +31,8 @@ type overviewRow struct {
 	end                    string
 	shortID                string
 	algorithmPeriodReturn  *float64
+	returnBasis            string
+	priceReturn            *float64
 	maxDrawdown            *float64
 	sharpe                 *float64
 	sortino                *float64
@@ -88,7 +90,9 @@ func (d *Datasource) handleListExecutionOverview(ctx context.Context, _ grafana.
 			return grafana.ErrDataResponse(grafana.StatusBadRequest, fmt.Sprintf("get execution: %v", err.Error()))
 		}
 		ticker := d.overviewBenchmark(ctx, execution.GetBacktest(), benchmarks)
-		rows = append(rows, overviewRowFrom(execution, got.GetPeriods(), ticker))
+		row := overviewRowFrom(execution, got.GetPeriods(), ticker)
+		withReturnBasis(&row, got.GetExecution().GetReturnBasis(), lastStoredPeriod(got.GetPeriods()))
+		rows = append(rows, row)
 	}
 	sortOverviewRows(rows)
 
@@ -269,6 +273,34 @@ func overviewRowFrom(execution *backtestpb.Execution, periods []*backtestpb.Peri
 	return row
 }
 
+// Return basis labels. They name what the Total return column measures for
+// each row: the CLI's return label ("Total return", "Adjusted-close return",
+// "Return") with its note on dividends.
+const (
+	totalReturnLabel         = "Total return (dividends paid on the ex-date)"
+	adjustedCloseReturnLabel = "Adjusted-close return (dividends inside prices)"
+	beforeDividendsLabel     = "Return before dividends were counted"
+)
+
+// withReturnBasis says what a row's Return measures. Only a total-return
+// run has a price return; the others leave it empty rather than repeating
+// Return under another name.
+func withReturnBasis(row *overviewRow, basis backtestpb.ReturnBasis, last *backtestpb.Period) {
+	switch basis {
+	case backtestpb.ReturnBasis_RETURN_BASIS_TOTAL:
+		row.returnBasis = totalReturnLabel
+		if last != nil {
+			row.priceReturn = newFloat(last.GetPriceReturn())
+		}
+	case backtestpb.ReturnBasis_RETURN_BASIS_ADJUSTED_CLOSE:
+		row.returnBasis = adjustedCloseReturnLabel
+	case backtestpb.ReturnBasis_RETURN_BASIS_UNSPECIFIED:
+		row.returnBasis = beforeDividendsLabel
+	default:
+		row.returnBasis = beforeDividendsLabel
+	}
+}
+
 func newFloat(v float64) *float64 {
 	copied := v
 	return &copied
@@ -314,6 +346,8 @@ func overviewFrame(refID string, rows []overviewRow) *data.Frame {
 	ids := make([]string, n)
 	executions := make([]string, n)
 	returns := make([]*float64, n)
+	returnBases := make([]string, n)
+	priceReturns := make([]*float64, n)
 	drawdowns := make([]*float64, n)
 	sharpes := make([]*float64, n)
 	sortinos := make([]*float64, n)
@@ -328,6 +362,8 @@ func overviewFrame(refID string, rows []overviewRow) *data.Frame {
 		ids[i] = row.shortID
 		executions[i] = row.executionID
 		returns[i] = row.algorithmPeriodReturn
+		returnBases[i] = row.returnBasis
+		priceReturns[i] = row.priceReturn
 		drawdowns[i] = row.maxDrawdown
 		sharpes[i] = row.sharpe
 		sortinos[i] = row.sortino
@@ -346,7 +382,9 @@ func overviewFrame(refID string, rows []overviewRow) *data.Frame {
 		overviewTextField("id", "ID", ids, true),
 		overviewNumberField("starting_portfolio_value", "Start value", "currencyUSD", startingValues),
 		overviewNumberField("portfolio_value", "End value", "currencyUSD", values),
-		overviewNumberField("algorithm_period_return", "Return", "percentunit", returns),
+		overviewNumberField("algorithm_period_return", "Total return", "percentunit", returns),
+		overviewTextField("return_basis", "Return basis", returnBases, false),
+		overviewNumberField("price_return", "Price return", "percentunit", priceReturns),
 		overviewTextField("benchmark", "Benchmark", benchmarkCells, false),
 		overviewNumberField("sharpe", "Sharpe", "none", sharpes),
 		overviewNumberField("sortino", "Sortino", "none", sortinos),
