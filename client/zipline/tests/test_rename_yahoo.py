@@ -20,6 +20,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from foreverbull_zipline.data_bundles.dividends import no_dividends
 from foreverbull_zipline.data_bundles.foreverbull import SQLIngester
 from foreverbull_zipline.engine import Engine
 from foreverbull_zipline.engine import zero_benchmark_returns
@@ -113,6 +114,7 @@ def yahoo_bundle(tmp_path, monkeypatch):
             engine=YahooOHLC(),
             aliases=ALIASES,
             events=pd.DataFrame(columns=pd.Index(["symbol", "kind", "on_date", "evidence"])),
+            dividends=no_dividends(),
         ),
         calendar_name="XNYS",
     )
@@ -271,6 +273,7 @@ def pre_rename_yahoo_bundle(tmp_path, monkeypatch):
             engine=YahooOHLC(),
             aliases=PRE_RENAME_ALIASES,
             events=pd.DataFrame(columns=pd.Index(["symbol", "kind", "on_date", "evidence"])),
+            dividends=no_dividends(),
         ),
         calendar_name="XNYS",
     )

@@ -138,5 +138,6 @@ def fb_database(fb_database):
                         for row in bars.to_dict("records")
                     ],
                 )
+                database.record_dividend_fetch(conn, provider, symbol)
 
     yield engine, load_recorded

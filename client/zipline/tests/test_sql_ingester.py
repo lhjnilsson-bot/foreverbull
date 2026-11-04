@@ -5,6 +5,7 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
+from foreverbull_zipline.data_bundles.dividends import no_dividends
 from foreverbull_zipline.data_bundles.foreverbull import MissingSessionsError
 from foreverbull_zipline.data_bundles.foreverbull import SQLIngester
 from foreverbull_zipline.data_bundles.foreverbull import bundle_provider
@@ -116,7 +117,7 @@ class _ProviderEngine:
 def test_sql_ingester_threads_backtest_provider(monkeypatch):
     monkeypatch.setenv("OHLC_PROVIDER", "stooq")
     engine = _ProviderEngine()
-    SQLIngester(backtest_pb.Backtest(name="sp100", provider="yahoo"), engine=engine)
+    SQLIngester(backtest_pb.Backtest(name="sp100", provider="yahoo"), engine=engine, dividends=no_dividends())
     assert engine.provider == "yahoo"
 
 
@@ -207,7 +208,7 @@ def test_sql_ingester_one_sid_for_ticker_change_and_autoclose_on_drop():
             "member_to": [None, None, date(2023, 2, 28)],
         }
     )
-    ingester = SQLIngester(_backtest(), engine=engine, aliases=aliases, events=_no_events())
+    ingester = SQLIngester(_backtest(), engine=engine, aliases=aliases, events=_no_events(), dividends=no_dividends())
     ingester._df_metadata = ingester.create_metadata()
     ingested = list(ingester.writer(False))
     metadata = pd.DataFrame(ingester._df_metadata)
@@ -242,7 +243,9 @@ def test_sql_ingester_sets_auto_close_when_no_membership_table():
             "OEF": _session_bars("OEF", date(2022, 12, 1), date(2023, 2, 28), 13.0),
         }
     )
-    ingester = SQLIngester(_backtest(), engine=engine, aliases=pd.DataFrame(), events=_no_events())
+    ingester = SQLIngester(
+        _backtest(), engine=engine, aliases=pd.DataFrame(), events=_no_events(), dividends=no_dividends()
+    )
     ingester._df_metadata = ingester.create_metadata()
     list(ingester.writer(False))
     metadata = pd.DataFrame(ingester._df_metadata)
@@ -274,7 +277,9 @@ def test_sql_ingester_aligns_bars_to_the_first_session():
             "OEF": _bars_at_open(days, 13.0),
         }
     )
-    ingester = SQLIngester(_backtest(), engine=engine, aliases=pd.DataFrame(), events=_no_events())
+    ingester = SQLIngester(
+        _backtest(), engine=engine, aliases=pd.DataFrame(), events=_no_events(), dividends=no_dividends()
+    )
     ingester._df_metadata = ingester.create_metadata()
     ingested = list(ingester.writer(False))
     metadata = pd.DataFrame(ingester._df_metadata)
@@ -297,7 +302,9 @@ def test_sql_ingester_names_every_symbol_without_bars_and_writes_nothing():
             "OEF": _session_bars("OEF", date(2022, 12, 1), date(2023, 2, 28), 13.0),
         }
     )
-    ingester = SQLIngester(_backtest(), engine=engine, aliases=pd.DataFrame(), events=_no_events())
+    ingester = SQLIngester(
+        _backtest(), engine=engine, aliases=pd.DataFrame(), events=_no_events(), dividends=no_dividends()
+    )
     ingester._df_metadata = ingester.create_metadata()
     written = []
 
@@ -353,7 +360,9 @@ def test_sql_ingester_names_a_renamed_symbol_without_bars_by_its_latest_ticker()
             "OEF": _session_bars("OEF", date(2024, 1, 2), date(2024, 3, 28), 13.0),
         }
     )
-    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=_meta_rename(), events=_no_events())
+    ingester = SQLIngester(
+        _quarter_backtest(), engine=engine, aliases=_meta_rename(), events=_no_events(), dividends=no_dividends()
+    )
     ingester._df_metadata = ingester.create_metadata()
 
     with pytest.raises(PlainSentence) as error:
@@ -374,7 +383,9 @@ def test_sql_ingester_names_a_symbol_without_an_earlier_ticker_alone():
             "OEF": _session_bars("OEF", date(2024, 1, 2), date(2024, 3, 28), 13.0),
         }
     )
-    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=pd.DataFrame(), events=_no_events())
+    ingester = SQLIngester(
+        _quarter_backtest(), engine=engine, aliases=pd.DataFrame(), events=_no_events(), dividends=no_dividends()
+    )
     ingester._df_metadata = ingester.create_metadata()
 
     with pytest.raises(PlainSentence) as error:
@@ -395,7 +406,9 @@ def test_sql_ingester_lists_a_renamed_symbol_in_the_block():
             "OEF": _bars("OEF", [], 13.0),
         }
     )
-    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=_meta_rename(), events=_no_events())
+    ingester = SQLIngester(
+        _quarter_backtest(), engine=engine, aliases=_meta_rename(), events=_no_events(), dividends=no_dividends()
+    )
     ingester._df_metadata = ingester.create_metadata()
 
     with pytest.raises(PlainSentence) as error:
@@ -421,7 +434,9 @@ def test_sql_ingester_names_symbols_without_bars_and_gaps_in_one_error():
             "OEF": _bars("OEF", gapped, 13.0),
         }
     )
-    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=_meta_rename(), events=_no_events())
+    ingester = SQLIngester(
+        _quarter_backtest(), engine=engine, aliases=_meta_rename(), events=_no_events(), dividends=no_dividends()
+    )
     ingester._df_metadata = ingester.create_metadata()
     written = []
 
@@ -448,7 +463,9 @@ def test_sql_ingester_writes_nothing_when_a_later_sid_has_a_gap():
             "OEF": _bars("OEF", gapped, 13.0),
         }
     )
-    ingester = SQLIngester(_quarter_backtest(), engine=engine, aliases=_meta_rename(), events=_no_events())
+    ingester = SQLIngester(
+        _quarter_backtest(), engine=engine, aliases=_meta_rename(), events=_no_events(), dividends=no_dividends()
+    )
     ingester._df_metadata = ingester.create_metadata()
     written = []
 
@@ -466,7 +483,7 @@ class _BrokenDatabase:
 
 
 def test_load_events_raises_when_the_engine_is_missing():
-    ingester = SQLIngester(_backtest(), engine=FakeEngine({}))
+    ingester = SQLIngester(_backtest(), engine=FakeEngine({}), dividends=no_dividends())
 
     with pytest.raises(PlainSentence) as error:
         ingester.load_events()
@@ -479,7 +496,9 @@ def test_load_events_raises_when_the_engine_is_missing():
 
 
 def test_load_events_raises_when_the_kind_column_is_missing():
-    ingester = SQLIngester(_backtest(), engine=FakeEngine({}), events=pd.DataFrame({"symbol": ["XYZ"]}))
+    ingester = SQLIngester(
+        _backtest(), engine=FakeEngine({}), events=pd.DataFrame({"symbol": ["XYZ"]}), dividends=no_dividends()
+    )
 
     with pytest.raises(PlainSentence) as error:
         ingester.load_events()
@@ -488,12 +507,12 @@ def test_load_events_raises_when_the_kind_column_is_missing():
 
 
 def test_load_events_accepts_an_empty_frame_with_a_kind_column():
-    ingester = SQLIngester(_backtest(), engine=FakeEngine({}), events=_no_events())
+    ingester = SQLIngester(_backtest(), engine=FakeEngine({}), events=_no_events(), dividends=no_dividends())
     assert ingester._delisted_symbols() == set()
 
 
 def test_sql_ingester_fails_when_the_ticker_history_cant_be_read(caplog):
-    ingester = SQLIngester(_quarter_backtest(), engine=_BrokenDatabase())
+    ingester = SQLIngester(_quarter_backtest(), engine=_BrokenDatabase(), dividends=no_dividends())
 
     with pytest.raises(PlainSentence) as error:
         ingester.load_aliases()
@@ -516,7 +535,7 @@ def test_sql_ingester_logs_the_ticker_history_cause_redacted(caplog, monkeypatch
         raise OperationalError("SELECT 1", {}, Exception("connect to postgresql://fb:hunter2@db.invalid:5432 failed"))
 
     monkeypatch.setattr("foreverbull_zipline.data_bundles.foreverbull.read_sql_query", broken_query)
-    ingester = SQLIngester(_quarter_backtest(), engine=_BrokenDatabase())
+    ingester = SQLIngester(_quarter_backtest(), engine=_BrokenDatabase(), dividends=no_dividends())
 
     with pytest.raises(PlainSentence):
         ingester.load_aliases()
