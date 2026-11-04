@@ -11,6 +11,10 @@ from foreverbull_zipline.data_bundles.bundle_alignment import SESSION_ALIGNED_BU
 from foreverbull_zipline.data_bundles.bundle_alignment import bundle_dates_misaligned
 from foreverbull_zipline.data_bundles.bundle_alignment import bundle_version
 from foreverbull_zipline.data_bundles.bundle_alignment import ensure_session_aligned_bundle
+from foreverbull_zipline.data_bundles.dividends import BundleDividends
+from foreverbull_zipline.data_bundles.dividends import read_bundle_dividends
+from foreverbull_zipline.data_bundles.dividends import read_foreign_dividends
+from foreverbull_zipline.data_bundles.dividends import write_foreign_dividends
 from foreverbull_zipline.errors import PlainSentence
 from zipline.data import bundles
 from zipline.data.bundles.core import to_bundle_ingest_dirname
@@ -147,7 +151,9 @@ def test_missing_bundle_fails_before_a_run(tmp_path):
         ensure_session_aligned_bundle("missing_bundle", {"ZIPLINE_ROOT": str(tmp_path)})
 
 
-def _write_synthetic_bundle(bundle_name: str, *, stale: bool) -> tuple[pd.DatetimeIndex, list[float]]:
+def _write_synthetic_bundle(
+    bundle_name: str, *, stale: bool, dividends: BundleDividends | None = None
+) -> tuple[pd.DatetimeIndex, list[float]]:
     calendar = get_calendar("XNYS")
     sessions = calendar.sessions_in_range(pd.Timestamp("2023-01-03"), pd.Timestamp("2023-01-31"))  # type: ignore[arg-type]
     closes = [100.0 + index for index in range(len(sessions))]
@@ -188,7 +194,11 @@ def _write_synthetic_bundle(bundle_name: str, *, stale: bool) -> tuple[pd.Dateti
     ):
         daily_bar_writer.write([(0, frame)])
         asset_db_writer.write(equities=metadata)
-        adjustment_writer.write()
+        if dividends is None:
+            adjustment_writer.write()
+            return
+        adjustment_writer.write(dividends=dividends.frame)
+        write_foreign_dividends(adjustment_writer.conn, dividends.foreign)
 
     bundles.register(bundle_name, ingest_bundle, calendar_name="XNYS")
     bundles.ingest(bundle_name, os.environ, pd.Timestamp("2023-02-01", tz="UTC"), [], False)
@@ -223,6 +233,61 @@ def test_rebuild_realigns_a_stale_bundle_and_preserves_its_prices(tmp_path, monk
         assert ensure_session_aligned_bundle("stale_rebuild_bundle", os.environ) is False
     finally:
         bundles.unregister("stale_rebuild_bundle")
+
+
+def _one_foreign_dividend() -> BundleDividends:
+    # $0.50 ex 2023-01-17, credited that day, no declared or record date.
+    frame = pd.DataFrame(
+        {
+            "sid": pd.Series([0], dtype="int64"),
+            "ex_date": pd.to_datetime(["2023-01-17"]),
+            "declared_date": pd.to_datetime([None]),
+            "record_date": pd.to_datetime([None]),
+            "pay_date": pd.to_datetime(["2023-01-17"]),
+            "amount": [0.5],
+        }
+    )
+    foreign = pd.DataFrame({"sid": pd.Series([0], dtype="int64"), "ex_date": pd.to_datetime(["2023-01-17"])})
+    return BundleDividends(frame=frame, foreign=foreign)
+
+
+def test_rebuild_carries_the_booked_dividends(tmp_path, monkeypatch):
+    # The realigned ingest books the same dividend, still foreign, so the
+    # run counts it the same way as before the rebuild.
+    monkeypatch.setenv("ZIPLINE_ROOT", str(tmp_path))
+    booked = _one_foreign_dividend()
+    _write_synthetic_bundle("stale_dividend_bundle", stale=True, dividends=booked)
+    try:
+        assert ensure_session_aligned_bundle("stale_dividend_bundle", os.environ) is True
+
+        bundle = bundles.load("stale_dividend_bundle", os.environ, None)
+        try:
+            carried = read_bundle_dividends(bundle.adjustment_reader.conn)
+        finally:
+            bundle.close()
+        assert carried is not None
+        pd.testing.assert_frame_equal(carried.frame, booked.frame, check_dtype=False)
+        pd.testing.assert_frame_equal(carried.foreign, booked.foreign, check_dtype=False)
+    finally:
+        bundles.unregister("stale_dividend_bundle")
+
+
+def test_rebuild_of_a_bundle_from_before_dividends_stays_refused(tmp_path, monkeypatch):
+    # No dividends to carry: the rebuilt ingest has no foreign table
+    # either, so the run still asks for `fbull backtest create`.
+    monkeypatch.setenv("ZIPLINE_ROOT", str(tmp_path))
+    _write_synthetic_bundle("stale_no_dividend_bundle", stale=True)
+    try:
+        assert ensure_session_aligned_bundle("stale_no_dividend_bundle", os.environ) is True
+
+        bundle = bundles.load("stale_no_dividend_bundle", os.environ, None)
+        try:
+            assert read_foreign_dividends(bundle.adjustment_reader.conn) is None
+            assert read_bundle_dividends(bundle.adjustment_reader.conn) is None
+        finally:
+            bundle.close()
+    finally:
+        bundles.unregister("stale_no_dividend_bundle")
 
 
 class _BundleWithoutClose(NamedTuple):
