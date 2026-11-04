@@ -81,9 +81,16 @@ export type ExecutionResult = {
   algorithmPeriodReturn?: number;
   sharpe?: number;
   sortino?: number;
+  // A total return for yahoo and alpaca runs; see Execution.returnBasis.
+  priceReturn?: number;
   benchmarkPeriodReturn?: number;
+  benchmarkPriceReturn?: number;
   positions?: unknown[];
 };
+
+// What a run's return measures. UNSPECIFIED is a run stored before
+// dividends were counted.
+export type ReturnBasis = "RETURN_BASIS_UNSPECIFIED" | "RETURN_BASIS_TOTAL" | "RETURN_BASIS_ADJUSTED_CLOSE";
 
 export type Execution = {
   id?: string;
@@ -92,6 +99,8 @@ export type Execution = {
   startDate?: DateParts;
   endDate?: DateParts;
   result?: ExecutionResult;
+  returnBasis?: ReturnBasis;
+  foreignDividendsGross?: number;
 };
 
 // GET /api/executions/{id} is GetExecutionResponse, not the execution alone.
