@@ -1,7 +1,7 @@
 {
   "uid": "fb-backtest-overview",
   "title": "Backtest overview",
-  "description": "Leaderboard of executions whose start_date..end_date overlaps the time picker. Saved time is the last two years, so older runs stay hidden until the range is widened. Date columns are Start and End. Portfolio columns are Start value and End value (currencyUSD): Start value is the earliest session's starting cash plus starting positions value, End value is the last period's portfolio_value. Return, Max drawdown, Sharpe, and Sortino are that last period and are not rescaled. Benchmark is not set, not available, or the signed percent. Active days is N of M. A missing ratio stays empty. A row opens /d/ee9ep4jxtwkcgf?var-execution={uuid} and adds var-backtest when the name is known. That execution page still works with only var-execution.",
+  "description": "Leaderboard of executions whose start_date..end_date overlaps the time picker. Saved time is the last two years, so older runs stay hidden until the range is widened. Date columns are Start and End. Portfolio columns are Start value and End value (currencyUSD): Start value is the earliest session's starting cash plus starting positions value, End value is the last period's portfolio_value. Total return, Max drawdown, Sharpe, and Sortino are that last period and are not rescaled. Return basis says what Total return measures: Total return (dividends paid on the ex-date) for yahoo and alpaca, whose dividends are credited as cash at the ex-date open, Adjusted-close return (dividends inside prices) for stooq, or a run stored before dividends were counted. Price return is shown for a total-return run only. Benchmark is not set, not available, or the signed percent, on the same basis as Total return. Active days is N of M. A missing ratio stays empty. A row opens /d/ee9ep4jxtwkcgf?var-execution={uuid} and adds var-backtest when the name is known. That execution page still works with only var-execution.",
   "tags": ["foreverbull", "backtest"],
   "schemaVersion": 40,
   "refresh": "",
@@ -275,7 +275,19 @@
           {
             "matcher": { "id": "byName", "options": "algorithm_period_return" },
             "properties": [
-              { "id": "displayName", "value": "Return" },
+              { "id": "displayName", "value": "Total return" },
+              { "id": "unit", "value": "percentunit" },
+              { "id": "decimals", "value": 2 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "return_basis" },
+            "properties": [{ "id": "displayName", "value": "Return basis" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "price_return" },
+            "properties": [
+              { "id": "displayName", "value": "Price return" },
               { "id": "unit", "value": "percentunit" },
               { "id": "decimals", "value": 2 }
             ]

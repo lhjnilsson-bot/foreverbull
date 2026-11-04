@@ -12,6 +12,7 @@ import (
 	backtestpb "github.com/lhjnilsson/foreverbull/pkg/pb/backtest"
 	backtestsvc "github.com/lhjnilsson/foreverbull/pkg/pb/backtest/service"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func protoYMD(year, month, day int32) *fbPb.Date {
@@ -346,7 +347,10 @@ func (test *DatasouceTest) TestOverviewExcludesExecutionEndingBeforePicker() {
 	test.Equal("End", overviewField(frame, "end").Config.DisplayNameFromDS)
 	test.Equal("Start value", overviewField(frame, "starting_portfolio_value").Config.DisplayNameFromDS)
 	test.Equal("End value", overviewField(frame, "portfolio_value").Config.DisplayNameFromDS)
-	test.Equal("Return", overviewField(frame, "algorithm_period_return").Config.DisplayNameFromDS)
+	test.Equal("Total return", overviewField(frame, "algorithm_period_return").Config.DisplayNameFromDS)
+	test.Equal("Return basis", overviewField(frame, "return_basis").Config.DisplayNameFromDS)
+	test.Equal("Price return", overviewField(frame, "price_return").Config.DisplayNameFromDS)
+	test.Equal("percentunit", overviewUnit(frame, "price_return"))
 	test.Equal("Benchmark", overviewField(frame, "benchmark").Config.DisplayNameFromDS)
 	test.Equal("Sharpe", overviewField(frame, "sharpe").Config.DisplayNameFromDS)
 	test.Equal("Sortino", overviewField(frame, "sortino").Config.DisplayNameFromDS)
@@ -459,4 +463,24 @@ func (test *DatasouceTest) overviewFloatPtr(frame *data.Frame, name string, i in
 		test.Failf(name, "unexpected type %T", field.At(i))
 		return nil
 	}
+}
+
+func TestOverviewLabelsTheReturnBasis(t *testing.T) {
+	last := &backtestpb.Period{AlgorithmPeriodReturn: 0.128124, PriceReturn: 0.111963}
+
+	total := overviewRow{}
+	withReturnBasis(&total, backtestpb.ReturnBasis_RETURN_BASIS_TOTAL, last)
+	require.Equal(t, "Total return (dividends paid on the ex-date)", total.returnBasis)
+	require.NotNil(t, total.priceReturn)
+	require.InDelta(t, 0.111963, *total.priceReturn, 1e-12)
+
+	adjusted := overviewRow{}
+	withReturnBasis(&adjusted, backtestpb.ReturnBasis_RETURN_BASIS_ADJUSTED_CLOSE, last)
+	require.Equal(t, "Adjusted-close return (dividends inside prices)", adjusted.returnBasis)
+	require.Nil(t, adjusted.priceReturn)
+
+	legacy := overviewRow{}
+	withReturnBasis(&legacy, backtestpb.ReturnBasis_RETURN_BASIS_UNSPECIFIED, last)
+	require.Equal(t, "Return before dividends were counted", legacy.returnBasis)
+	require.Nil(t, legacy.priceReturn)
 }

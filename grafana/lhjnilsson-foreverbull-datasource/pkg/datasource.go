@@ -195,6 +195,16 @@ const (
 	ShortExposure    QueryMetric = "short_exposure"
 	EndingExposure   QueryMetric = "ending_exposure"
 	StartingExposure QueryMetric = "starting_exposure"
+	// TotalReturn is the run's return from its start to each close.
+	TotalReturn QueryMetric = "total_return"
+	// PriceReturn is the run's return from its start without the dividend
+	// cash it was credited. Only a total-return run has one.
+	PriceReturn QueryMetric = "price_return"
+	// PriceReturns is each period's price return, the daily counterpart of
+	// returns.
+	PriceReturns QueryMetric = "price_returns"
+	// BenchmarkPriceReturn is the benchmark's return without its dividends.
+	BenchmarkPriceReturn QueryMetric = "benchmark_price_return"
 )
 
 var listedMetrics = []QueryMetric{
@@ -220,6 +230,10 @@ var listedMetrics = []QueryMetric{
 	ShortExposure,
 	EndingExposure,
 	StartingExposure,
+	TotalReturn,
+	PriceReturn,
+	PriceReturns,
+	BenchmarkPriceReturn,
 }
 
 // Execution is the canonical query-JSON object for an execution id.
@@ -362,6 +376,10 @@ func (d *Datasource) handleGetExecutionMetric(ctx context.Context, _ grafana.Que
 	shortExposure := make([]float64, len(periods))
 	endingExposure := make([]float64, len(periods))
 	startingExposure := make([]float64, len(periods))
+	totalReturn := make([]float64, len(periods))
+	priceReturn := make([]float64, len(periods))
+	priceReturns := make([]float64, len(periods))
+	benchmarkPriceReturn := make([]*float64, len(periods))
 
 	for i, period := range periods {
 		times[i] = periodTime(period)
@@ -387,24 +405,33 @@ func (d *Datasource) handleGetExecutionMetric(ctx context.Context, _ grafana.Que
 		shortExposure[i] = period.ShortExposure
 		endingExposure[i] = period.EndingExposure
 		startingExposure[i] = period.StartingExposure
+		totalReturn[i] = period.AlgorithmPeriodReturn
+		priceReturn[i] = period.PriceReturn
+		priceReturns[i] = dailyPriceReturn(periods, i)
+		benchmarkPriceReturn[i] = period.BenchmarkPriceReturn
 	}
+	basis := execution.GetExecution().GetReturnBasis()
 
 	frame := data.NewFrame(seriesLabel)
 	frame.Fields = append(frame.Fields, data.NewField("time", nil, times))
+	frame.Meta = &data.FrameMeta{Notices: returnNotices(execution.GetExecution())}
 	for _, metric := range qm.Metrics {
+		if returnMetric(metric.Name) {
+			appendReturnField(frame, metric.Name, basis, seriesLabels, map[QueryMetric]interface{}{
+				Returns: returns, Benchmark: benchmark, TotalReturn: totalReturn, PriceReturn: priceReturn,
+				PriceReturns: priceReturns, BenchmarkPriceReturn: benchmarkPriceReturn,
+			}[metric.Name])
+			continue
+		}
 		switch metric.Name {
 		case PortfolioValue:
 			appendMetricField(frame, string(PortfolioValue), seriesLabels, portfolioValue)
-		case Returns:
-			appendMetricField(frame, string(Returns), seriesLabels, returns)
 		case PnL:
 			appendMetricField(frame, string(PnL), seriesLabels, pnl)
 		case Cash:
 			appendMetricField(frame, string(Cash), seriesLabels, cash)
 		case MaxDrawdown:
 			appendMetricField(frame, string(MaxDrawdown), seriesLabels, maxDrawdown)
-		case Benchmark:
-			appendMetricField(frame, string(Benchmark), seriesLabels, benchmark)
 		case Alpha:
 			appendMetricField(frame, string(Alpha), seriesLabels, alpha)
 		case Beta:
@@ -465,7 +492,7 @@ func metricUnit(name string) string {
 	switch QueryMetric(name) {
 	case PortfolioValue, PnL, Cash, CapitalUsed, LongValue, ShortValue, LongExposure, ShortExposure, EndingExposure, StartingExposure:
 		return "currencyUSD"
-	case Returns, MaxDrawdown, Benchmark, Alpha:
+	case Returns, MaxDrawdown, Benchmark, Alpha, TotalReturn, PriceReturn, PriceReturns, BenchmarkPriceReturn:
 		return "percentunit"
 	case Sharpe, Sortino, Beta, GrossLeverage, NetLeverage, MaxLeverage:
 		return "none"
