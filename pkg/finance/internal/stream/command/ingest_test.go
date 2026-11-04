@@ -85,7 +85,7 @@ func (test *IngestCommandTest) TearDownTest() {
 func (test *IngestCommandTest) TestIngestCommandIngest() {
 	message := new(stream.MockMessage)
 	message.On("MustGet", stream.DBDep).Return(test.db)
-	message.On("MustGet", dependency.MarketDataDep).Return(test.marketdata)
+	message.On("MustGet", dependency.MarketDataDep).Return(dividendFree{test.marketdata})
 
 	newAsset := pb.Asset{
 		Symbol: "NEW123",
@@ -140,7 +140,7 @@ func (test *IngestCommandTest) TestIngestCommandIngest() {
 func (test *IngestCommandTest) TestIngestStoresNothingWhenABarIsRefused() {
 	message := new(stream.MockMessage)
 	message.On("MustGet", stream.DBDep).Return(test.db)
-	message.On("MustGet", dependency.MarketDataDep).Return(test.marketdata)
+	message.On("MustGet", dependency.MarketDataDep).Return(dividendFree{test.marketdata})
 
 	test.marketdata.On("GetAsset", mock.Anything, "XYZ").Return(&pb.Asset{Symbol: "XYZ", Name: "XYZ Corp"}, nil)
 	test.marketdata.On("GetOHLC", mock.Anything, "XYZ", mock.Anything, mock.Anything).Return(
@@ -174,7 +174,7 @@ func (test *IngestCommandTest) TestAlpacaFailsBeforeDownload() {
 
 	message := new(stream.MockMessage)
 	message.On("MustGet", stream.DBDep).Return(test.db)
-	message.On("MustGet", dependency.MarketDataDep).Return(test.marketdata)
+	message.On("MustGet", dependency.MarketDataDep).Return(dividendFree{test.marketdata})
 	message.On("ParsePayload", &fs.IngestCommand{}).Return(nil).Run(func(args mock.Arguments) {
 		command := args.Get(0).(*fs.IngestCommand)
 		// yahoo routes GetOHLC to the mock supplier.
@@ -218,7 +218,7 @@ func sameDay(want time.Time) interface{} {
 func (test *IngestCommandTest) ingestAAPL(start, end string) error {
 	message := new(stream.MockMessage)
 	message.On("MustGet", stream.DBDep).Return(test.db)
-	message.On("MustGet", dependency.MarketDataDep).Return(test.marketdata)
+	message.On("MustGet", dependency.MarketDataDep).Return(dividendFree{test.marketdata})
 	message.On("ParsePayload", &fs.IngestCommand{}).Return(nil).Run(func(args mock.Arguments) {
 		command := args.Get(0).(*fs.IngestCommand)
 		command.Provider = "yahoo"
@@ -514,7 +514,7 @@ CREATE TRIGGER fail_on_bad_row BEFORE INSERT ON ohlc FOR EACH ROW EXECUTE FUNCTI
 
 	message := new(stream.MockMessage)
 	message.On("MustGet", stream.DBDep).Return(test.db)
-	message.On("MustGet", dependency.MarketDataDep).Return(test.marketdata)
+	message.On("MustGet", dependency.MarketDataDep).Return(dividendFree{test.marketdata})
 	test.marketdata.On("GetAsset", mock.Anything, "XYZ").Return(&pb.Asset{Symbol: "XYZ", Name: "XYZ Corp"}, nil)
 	test.marketdata.On("GetOHLC", mock.Anything, "XYZ", mock.Anything, mock.Anything).Return(
 		[]*pb.OHLC{
@@ -584,7 +584,7 @@ func (test *IngestCommandTest) TestIngestKeepsCrumbOutOfTaskState() {
 			tc.setup(md)
 			message := new(stream.MockMessage)
 			message.On("MustGet", stream.DBDep).Return(test.db)
-			message.On("MustGet", dependency.MarketDataDep).Return(md)
+			message.On("MustGet", dependency.MarketDataDep).Return(dividendFree{md})
 			message.On("ParsePayload", &fs.IngestCommand{}).Return(nil).Run(func(args mock.Arguments) {
 				command := args.Get(0).(*fs.IngestCommand)
 				command.Provider = "yahoo"
@@ -609,7 +609,7 @@ func (test *IngestCommandTest) ingestSymbols(md *supplier.MockMarketdata, symbol
 func (test *IngestCommandTest) ingestSymbolsVia(provider string, md *supplier.MockMarketdata, symbols ...string) error {
 	message := new(stream.MockMessage)
 	message.On("MustGet", stream.DBDep).Return(test.db)
-	message.On("MustGet", dependency.MarketDataDep).Return(md)
+	message.On("MustGet", dependency.MarketDataDep).Return(dividendFree{md})
 	message.On("ParsePayload", &fs.IngestCommand{}).Return(nil).Run(func(args mock.Arguments) {
 		command := args.Get(0).(*fs.IngestCommand)
 		command.Provider = provider

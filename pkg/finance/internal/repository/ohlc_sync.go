@@ -650,3 +650,32 @@ func (db *OHLC) replaceDividends(ctx context.Context, provider, symbol string, c
 	}
 	return err
 }
+
+// SyncSource stores the bars of provider and symbol through the Sync rule,
+// and for a provider whose bars are not dividend-adjusted (yahoo, alpaca)
+// the dividends with them, in the same transaction. Stooq's bars already
+// include dividends, so it stores bars only. A yahoo or alpaca source that
+// can't fetch dividends is an error, not a run without them.
+func (db *OHLC) SyncSource(ctx context.Context, provider, symbol string, start time.Time, end *time.Time,
+	fetch FetchBars, source supplier.Marketdata,
+) error {
+	switch priceProvider(provider) {
+	case "stooq":
+		return db.Sync(ctx, provider, symbol, start, end, fetch)
+	case "yahoo", "alpaca":
+		dividends, ok := source.(supplier.Dividends)
+		if !ok {
+			return &StoreError{Symbol: symbol, Err: fmt.Errorf("%s price source can't fetch dividends", provider)}
+		}
+		return db.SyncWithDividends(ctx, provider, symbol, start, end, fetch,
+			func(from time.Time, to *time.Time) ([]supplier.Dividend, error) {
+				found, err := dividends.GetDividends(ctx, symbol, from, to)
+				if err != nil {
+					return nil, DividendFetchFailure(provider, symbol, err)
+				}
+				return found, nil
+			})
+	default:
+		return &StoreError{Symbol: symbol, Err: fmt.Errorf("unknown price provider %q", provider)}
+	}
+}

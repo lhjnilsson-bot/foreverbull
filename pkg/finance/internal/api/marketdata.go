@@ -303,6 +303,15 @@ func failDownload(rsp *servicePb.DownloadHistoricalDataResponse, err error) {
 	if errors.As(err, &barsStatus) {
 		rsp.ProviderStatus = barsStatus.ProviderStatus()
 	}
+	var dividendFetch *financeapi.DividendFetchError
+	if errors.As(err, &dividendFetch) {
+		rsp.DividendFailure = dividendFetch.DividendFailureProto()
+	}
+	var dividend *repository.DividendError
+	if errors.As(err, &dividend) {
+		invalid := &financeapi.DividendFetchError{Provider: dividend.Provider, Symbol: dividend.Symbol, Kind: financeapi.DividendInvalid}
+		rsp.DividendFailure = invalid.DividendFailureProto()
+	}
 }
 
 // barsStatusError is the named STATUS_ERROR when the provider answered a
@@ -474,7 +483,7 @@ func (fs *MarketdataServer) downloadSymbol(
 	// this transaction and stay when the bars roll back; a retry finds them
 	// and stores the bars again.
 	fetch := prefetchedBars(ctx, bars, storeSymbol, start, end, ohlcs)
-	if err := ohlcRepo.Sync(ctx, provider, storeSymbol, start, end, fetch); err != nil {
+	if err := ohlcRepo.SyncSource(ctx, provider, storeSymbol, start, end, fetch, bars); err != nil {
 		var blocked *marketdata.BlockedError
 		if errors.As(err, &blocked) {
 			return blocked
@@ -482,7 +491,13 @@ func (fs *MarketdataServer) downloadSymbol(
 		var invalid *repository.InvalidPriceError
 		var stored *repository.StoreError
 		var status *marketdata.AlpacaBarsError
+		var dividendFetch *financeapi.DividendFetchError
+		var dividend *repository.DividendError
 		switch {
+		case errors.As(err, &dividendFetch), errors.As(err, &dividend):
+			// Both are whole sentences naming the provider, the symbol and
+			// the cause, and nothing of the symbol was stored. failDownload
+			// sends the cause as dividend_failure too.
 		case providerTimedOut(ctx, err):
 			// A refetch under the symbol lock ran out of time. It ends before
 			// the transaction's idle timeout, so it is told as the provider's

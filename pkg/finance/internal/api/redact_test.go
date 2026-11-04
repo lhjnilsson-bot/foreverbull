@@ -44,7 +44,7 @@ func TestInternalDownloadErrorDoesNotLogCrumb(t *testing.T) {
 func TestGetAssetErrorDoesNotReturnCrumb(t *testing.T) {
 	md := supplier.NewMockMarketdata(t)
 	md.On("GetAsset", mock.Anything, "AAPL").Return(nil, yahooURLError())
-	server := NewMarketdataServer(nil, md)
+	server := NewMarketdataServer(nil, dividendFree{md})
 
 	_, err := server.GetAsset(context.Background(), &servicePb.GetAssetRequest{
 		Identifier: &servicePb.GetAssetRequest_Symbol{Symbol: "AAPL"},

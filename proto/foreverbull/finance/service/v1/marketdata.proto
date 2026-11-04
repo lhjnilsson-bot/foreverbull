@@ -82,6 +82,28 @@ message DownloadHistoricalDataResponse {
   // later_ticker is set with STATUS_OK when the bars came from a later
   // ticker. It is unset when they came from symbol itself.
   LaterTicker later_ticker = 5;
+  // DividendFailure is why the symbol's dividends couldn't be downloaded or
+  // used. Its prices weren't stored either.
+  message DividendFailure {
+    enum Kind {
+      KIND_UNSPECIFIED = 0;
+      // The provider answered with an HTTP error status, in http_status.
+      KIND_HTTP_STATUS = 1;
+      // The provider didn't answer.
+      KIND_NO_ANSWER = 2;
+      // The provider's answer couldn't be read.
+      KIND_UNREADABLE = 3;
+      // The provider sent dividends that can't be used, such as an amount
+      // of 0 or a currency other than USD.
+      KIND_INVALID = 4;
+    }
+    string provider = 1;
+    Kind kind = 2;
+    int32 http_status = 3;
+  }
+  // dividend_failure is set with STATUS_ERROR when the symbol's dividends
+  // failed. Callers name the cause from it, not from error.
+  DividendFailure dividend_failure = 6;
 }
 
 // GetOHLC reads bars already stored in the broker database.

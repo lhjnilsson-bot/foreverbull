@@ -95,3 +95,72 @@ func TestDownloadFailureReadsTheProviderStatus(t *testing.T) {
 	}
 	require.NoError(t, api.DownloadFailure(ok))
 }
+
+// A failed dividend download has the price download's form and causes,
+// word for word, and says the prices weren't saved either.
+func TestDividendFetchErrorNamesTheCauseAndStep(t *testing.T) {
+	t.Parallel()
+	const report = " If it keeps happening, please report it at https://github.com/lhjnilsson/foreverbull/issues with this message."
+	cases := []struct {
+		failure api.DividendFetchError
+		want    string
+	}{
+		{
+			api.DividendFetchError{Provider: "yahoo", Symbol: "KO", Kind: api.DividendHTTPStatus, Status: http.StatusServiceUnavailable},
+			"foreverbull couldn't download dividends for KO from yahoo: yahoo had a server error (HTTP 503). " +
+				"Its prices weren't saved either. Run the download again in a few minutes, or try another provider.",
+		},
+		{
+			api.DividendFetchError{Provider: "Yahoo", Symbol: "KO", Kind: api.DividendHTTPStatus, Status: http.StatusTooManyRequests},
+			"foreverbull couldn't download dividends for KO from yahoo: yahoo limited how many requests foreverbull can make. " +
+				"Its prices weren't saved either. Wait a few minutes, then run the download again, or try another provider.",
+		},
+		{
+			api.DividendFetchError{Provider: "alpaca", Symbol: "KO", Kind: api.DividendHTTPStatus, Status: http.StatusForbidden},
+			"foreverbull couldn't download dividends for KO from alpaca: alpaca didn't accept foreverbull's API key (HTTP 403). " +
+				"Its prices weren't saved either. Check your alpaca API key and secret, or try another provider, " +
+				"then run the download again.",
+		},
+		{
+			api.DividendFetchError{Provider: "yahoo", Symbol: "KO", Kind: api.DividendNoAnswer},
+			"foreverbull couldn't download dividends for KO from yahoo: yahoo didn't answer. " +
+				"Its prices weren't saved either. Check your internet connection, then run the download again.",
+		},
+		{
+			api.DividendFetchError{Provider: "yahoo", Symbol: "KO", Kind: api.DividendUnreadable},
+			"foreverbull couldn't download dividends for KO from yahoo: yahoo's answer couldn't be read. " +
+				"Its prices weren't saved either. Try another provider, then run the download again." + report,
+		},
+	}
+	for _, tc := range cases {
+		require.EqualError(t, &tc.failure, tc.want)
+		require.NotContains(t, tc.failure.Error(), "--provider")
+	}
+}
+
+// dividend_failure crosses the RPC and reads back as the same error. An
+// unknown kind or a status outside 300..599 reads as nothing.
+func TestDividendFailureReadsTheProto(t *testing.T) {
+	t.Parallel()
+	sent := &api.DividendFetchError{Provider: "yahoo", Symbol: "KO", Kind: api.DividendHTTPStatus, Status: 503}
+	rsp := &servicePb.DownloadHistoricalDataResponse{
+		Symbol: "KO", Status: servicePb.DownloadHistoricalDataResponse_STATUS_ERROR, DividendFailure: sent.DividendFailureProto(),
+	}
+	require.Equal(t, sent, api.DividendFailure(rsp))
+
+	for _, kind := range []api.DividendFetchKind{api.DividendNoAnswer, api.DividendUnreadable, api.DividendInvalid} {
+		sent := &api.DividendFetchError{Provider: "alpaca", Symbol: "KO", Kind: kind}
+		rsp.DividendFailure = sent.DividendFailureProto()
+		require.Equal(t, sent, api.DividendFailure(rsp))
+	}
+
+	rsp.DividendFailure = &servicePb.DownloadHistoricalDataResponse_DividendFailure{Provider: "yahoo"}
+	require.NoError(t, api.DividendFailure(rsp))
+	rsp.DividendFailure = &servicePb.DownloadHistoricalDataResponse_DividendFailure{
+		Provider: "yahoo", Kind: servicePb.DownloadHistoricalDataResponse_DividendFailure_KIND_HTTP_STATUS, HttpStatus: 200,
+	}
+	require.NoError(t, api.DividendFailure(rsp))
+	rsp.Status = servicePb.DownloadHistoricalDataResponse_STATUS_OK
+	rsp.DividendFailure = sent.DividendFailureProto()
+	require.NoError(t, api.DividendFailure(rsp))
+}
