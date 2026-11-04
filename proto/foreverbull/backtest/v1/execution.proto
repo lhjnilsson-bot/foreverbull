@@ -17,6 +17,23 @@ message Execution {
   // Lines the user must read about how the run went although it finished,
   // such as members left out after their last price. Set when the run ends.
   repeated string notices = 8;
+  // How the run's returns count dividends. Set when the result is stored.
+  ReturnBasis return_basis = 9;
+  // Foreign dividends the run booked at their gross amount, before any
+  // withholding tax. Set when the result is stored.
+  int32 foreign_dividends_gross = 10;
+}
+
+// ReturnBasis is how a run's returns count dividends.
+enum ReturnBasis {
+  // A run stored before dividends were counted.
+  RETURN_BASIS_UNSPECIFIED = 0;
+  // Bars are split-adjusted only and dividends are credited as cash on the
+  // ex-date: the run has a total return and a price return.
+  RETURN_BASIS_TOTAL = 1;
+  // Bars are already dividend-adjusted (stooq) and no cash dividend is
+  // booked: the one return is an adjusted-close return.
+  RETURN_BASIS_ADJUSTED_CLOSE = 2;
 }
 
 // ExecutionFunction is one worker function stored when an execution is created.
@@ -57,14 +74,26 @@ message Period {
   double max_leverage = 21;
   double excess_return = 22;
   double treasury_period_return = 23;
+  // Total return from the run's start to this close: portfolio_value over
+  // the starting value, minus 1. Dividends count from their ex-date.
   double algorithm_period_return = 24;
   optional double algo_volatility = 25;
   optional double sharpe = 26;
   optional double sortino = 27;
+  // The benchmark's total return: close plus the dividend on its ex-date.
   optional double benchmark_period_return = 28;
   optional double benchmark_volatility = 29;
   optional double alpha = 30;
   optional double beta = 31;
 
   repeated foreverbull.finance.v1.Position positions = 32;
+
+  // Price return from the run's start to this close: portfolio_value less
+  // dividends_earned, over the starting value, minus 1.
+  double price_return = 33;
+  // Dividend cash credited from the run's start through this close, signed:
+  // a short pays. Each dividend is credited at the open of its ex-date.
+  double dividends_earned = 34;
+  // The benchmark's price return: close to close, no dividends.
+  optional double benchmark_price_return = 35;
 }
