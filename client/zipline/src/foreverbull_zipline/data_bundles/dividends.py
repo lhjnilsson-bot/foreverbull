@@ -396,3 +396,41 @@ def read_foreign_dividends(connection: sqlite3.Connection) -> set[tuple[int, pd.
         return None
     rows = connection.execute(f"SELECT sid, ex_date FROM {FOREIGN_DIVIDEND_TABLE}").fetchall()
     return {(int(sid), cast(pd.Timestamp, pd.Timestamp(ex_date))) for sid, ex_date in rows}
+
+
+# Zipline's adjustment writer stores a missing date (NaT) as this integer.
+_SQLITE_NO_DATE = np.iinfo(np.int64).min
+
+
+def _from_sqlite_date(seconds: int | None) -> pd.Timestamp | None:
+    if seconds is None or int(seconds) == _SQLITE_NO_DATE:
+        return None
+    return cast(pd.Timestamp, pd.Timestamp(int(seconds), unit="s"))
+
+
+def read_bundle_dividends(connection: sqlite3.Connection) -> BundleDividends | None:
+    """The dividends an ingest booked, ready to write into a new ingest.
+
+    None is a bundle ingested before dividends were booked: it has none
+    to carry, and a run refuses it.
+    """
+    foreign = read_foreign_dividends(connection)
+    if foreign is None:
+        return None
+    rows = connection.execute(
+        "SELECT sid, ex_date, declared_date, record_date, pay_date, amount FROM dividend_payouts"
+    ).fetchall()
+    frame = _zipline_frame(
+        [
+            {
+                "sid": int(sid),
+                "ex_date": _from_sqlite_date(ex_date),
+                "declared_date": _from_sqlite_date(declared),
+                "record_date": _from_sqlite_date(record),
+                "pay_date": _from_sqlite_date(pay_date),
+                "amount": float(amount),
+            }
+            for sid, ex_date, declared, record, pay_date, amount in rows
+        ]
+    )
+    return BundleDividends(frame=frame, foreign=_foreign_frame([{"sid": sid, "ex_date": ex} for sid, ex in foreign]))
