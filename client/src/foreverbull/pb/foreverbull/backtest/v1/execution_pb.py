@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal, TYPE_CHECKING, TypeAlias
 
-from protobuf import Message
+from protobuf import Enum, Message
 from protobuf._codegen import file_desc
 
 from ... import common_pb
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from ...finance.v1.marketdata_pb import Position
 
 
-_ExecutionFields: TypeAlias = Literal["id", "backtest", "session", "start_date", "end_date", "result", "notices"]
+_ExecutionFields: TypeAlias = Literal["id", "backtest", "session", "start_date", "end_date", "result", "notices", "return_basis", "foreign_dividends_gross"]
 
 class Execution(Message[_ExecutionFields]):
     """
@@ -61,9 +61,22 @@ class Execution(Message[_ExecutionFields]):
             ```proto
             repeated string notices = 8;
             ```
+        return_basis:
+            How the run's returns count dividends. Set when the result is stored.
+
+            ```proto
+            foreverbull.backtest.v1.ReturnBasis return_basis = 9;
+            ```
+        foreign_dividends_gross:
+            Foreign dividends the run booked at their gross amount, before any
+            withholding tax. Set when the result is stored.
+
+            ```proto
+            int32 foreign_dividends_gross = 10;
+            ```
     """
 
-    __slots__ = ("id", "backtest", "session", "start_date", "end_date", "result", "notices")
+    __slots__ = ("id", "backtest", "session", "start_date", "end_date", "result", "notices", "return_basis", "foreign_dividends_gross")
 
     if TYPE_CHECKING:
 
@@ -77,6 +90,8 @@ class Execution(Message[_ExecutionFields]):
             end_date: Date | None = None,
             result: Period | None = None,
             notices: list[str] | None = None,
+            return_basis: ReturnBasis | None = None,
+            foreign_dividends_gross: int = 0,
         ) -> None:
             pass
 
@@ -87,6 +102,8 @@ class Execution(Message[_ExecutionFields]):
         end_date: Date | None
         result: Period | None
         notices: list[str]
+        return_basis: ReturnBasis
+        foreign_dividends_gross: int
 
 _ExecutionFunctionFields: TypeAlias = Literal["name", "parameters"]
 
@@ -167,7 +184,7 @@ class ExecutionFunction(Message[_ExecutionFunctionFields]):
             value: str
             value_type: str
 
-_PeriodFields: TypeAlias = Literal["date", "PNL", "returns", "portfolio_value", "longs_count", "shorts_count", "long_value", "short_value", "starting_exposure", "ending_exposure", "long_exposure", "short_exposure", "capital_used", "gross_leverage", "net_leverage", "starting_value", "ending_value", "starting_cash", "ending_cash", "max_drawdown", "max_leverage", "excess_return", "treasury_period_return", "algorithm_period_return", "algo_volatility", "sharpe", "sortino", "benchmark_period_return", "benchmark_volatility", "alpha", "beta", "positions"]
+_PeriodFields: TypeAlias = Literal["date", "PNL", "returns", "portfolio_value", "longs_count", "shorts_count", "long_value", "short_value", "starting_exposure", "ending_exposure", "long_exposure", "short_exposure", "capital_used", "gross_leverage", "net_leverage", "starting_value", "ending_value", "starting_cash", "ending_cash", "max_drawdown", "max_leverage", "excess_return", "treasury_period_return", "algorithm_period_return", "algo_volatility", "sharpe", "sortino", "benchmark_period_return", "benchmark_volatility", "alpha", "beta", "positions", "price_return", "dividends_earned", "benchmark_price_return"]
 
 class Period(Message[_PeriodFields]):
     """
@@ -269,6 +286,9 @@ class Period(Message[_PeriodFields]):
             double treasury_period_return = 23;
             ```
         algorithm_period_return:
+            Total return from the run's start to this close: portfolio_value over
+            the starting value, minus 1. Dividends count from their ex-date.
+
             ```proto
             double algorithm_period_return = 24;
             ```
@@ -285,6 +305,8 @@ class Period(Message[_PeriodFields]):
             optional double sortino = 27;
             ```
         benchmark_period_return:
+            The benchmark's total return: close plus the dividend on its ex-date.
+
             ```proto
             optional double benchmark_period_return = 28;
             ```
@@ -304,9 +326,29 @@ class Period(Message[_PeriodFields]):
             ```proto
             repeated foreverbull.finance.v1.Position positions = 32;
             ```
+        price_return:
+            Price return from the run's start to this close: portfolio_value less
+            dividends_earned, over the starting value, minus 1.
+
+            ```proto
+            double price_return = 33;
+            ```
+        dividends_earned:
+            Dividend cash credited from the run's start through this close, signed:
+            a short pays. Each dividend is credited at the open of its ex-date.
+
+            ```proto
+            double dividends_earned = 34;
+            ```
+        benchmark_price_return:
+            The benchmark's price return: close to close, no dividends.
+
+            ```proto
+            optional double benchmark_price_return = 35;
+            ```
     """
 
-    __slots__ = ("date", "PNL", "returns", "portfolio_value", "longs_count", "shorts_count", "long_value", "short_value", "starting_exposure", "ending_exposure", "long_exposure", "short_exposure", "capital_used", "gross_leverage", "net_leverage", "starting_value", "ending_value", "starting_cash", "ending_cash", "max_drawdown", "max_leverage", "excess_return", "treasury_period_return", "algorithm_period_return", "algo_volatility", "sharpe", "sortino", "benchmark_period_return", "benchmark_volatility", "alpha", "beta", "positions")
+    __slots__ = ("date", "PNL", "returns", "portfolio_value", "longs_count", "shorts_count", "long_value", "short_value", "starting_exposure", "ending_exposure", "long_exposure", "short_exposure", "capital_used", "gross_leverage", "net_leverage", "starting_value", "ending_value", "starting_cash", "ending_cash", "max_drawdown", "max_leverage", "excess_return", "treasury_period_return", "algorithm_period_return", "algo_volatility", "sharpe", "sortino", "benchmark_period_return", "benchmark_volatility", "alpha", "beta", "positions", "price_return", "dividends_earned", "benchmark_price_return")
 
     if TYPE_CHECKING:
 
@@ -345,6 +387,9 @@ class Period(Message[_PeriodFields]):
             alpha: float | None = None,
             beta: float | None = None,
             positions: list[Position] | None = None,
+            price_return: float = 0,
+            dividends_earned: float = 0,
+            benchmark_price_return: float | None = None,
         ) -> None:
             pass
 
@@ -380,10 +425,48 @@ class Period(Message[_PeriodFields]):
         alpha: float
         beta: float
         positions: list[Position]
+        price_return: float
+        dividends_earned: float
+        benchmark_price_return: float
+
+class ReturnBasis(Enum):
+    """
+    ReturnBasis is how a run's returns count dividends.
+
+    ```proto
+    enum foreverbull.backtest.v1.ReturnBasis
+    ```
+
+    Attributes:
+        UNSPECIFIED:
+            A run stored before dividends were counted.
+
+            ```proto
+            RETURN_BASIS_UNSPECIFIED = 0
+            ```
+        TOTAL:
+            Bars are split-adjusted only and dividends are credited as cash on the
+            ex-date: the run has a total return and a price return.
+
+            ```proto
+            RETURN_BASIS_TOTAL = 1
+            ```
+        ADJUSTED_CLOSE:
+            Bars are already dividend-adjusted (stooq) and no cash dividend is
+            booked: the one return is an adjusted-close return.
+
+            ```proto
+            RETURN_BASIS_ADJUSTED_CLOSE = 2
+            ```
+    """
+
+    UNSPECIFIED = 0
+    TOTAL = 1
+    ADJUSTED_CLOSE = 2
 
 
 _DESC = file_desc(
-    b'\n\'foreverbull/backtest/v1/execution.proto\x12\x17foreverbull.backtest.v1\x1a\x18foreverbull/common.proto\x1a\'foreverbull/finance/v1/marketdata.proto"\xa2\x02\n\tExecution\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n\x08backtest\x18\x02 \x01(\tR\x08backtest\x12\x18\n\x07session\x18\x03 \x01(\tR\x07session\x127\n\nstart_date\x18\x04 \x01(\x0b2\x18.foreverbull.common.DateR\tstartDate\x123\n\x08end_date\x18\x05 \x01(\x0b2\x18.foreverbull.common.DateR\x07endDate\x12<\n\x06result\x18\x07 \x01(\x0b2\x1f.foreverbull.backtest.v1.PeriodH\x00R\x06result\x88\x01\x01\x12\x18\n\x07notices\x18\x08 \x03(\tR\x07noticesB\t\n\x07_result"\xd1\x01\n\x11ExecutionFunction\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12T\n\nparameters\x18\x02 \x03(\x0b24.foreverbull.backtest.v1.ExecutionFunction.ParameterR\nparameters\x1aR\n\tParameter\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value\x12\x1d\n\nvalue_type\x18\x03 \x01(\tR\tvalueType"\xcd\n\n\x06Period\x12,\n\x04date\x18\x01 \x01(\x0b2\x18.foreverbull.common.DateR\x04date\x12\x10\n\x03PNL\x18\x02 \x01(\x01R\x03PNL\x12\x18\n\x07returns\x18\x03 \x01(\x01R\x07returns\x12\'\n\x0fportfolio_value\x18\x04 \x01(\x01R\x0eportfolioValue\x12\x1f\n\x0blongs_count\x18\x05 \x01(\x05R\nlongsCount\x12!\n\x0cshorts_count\x18\x06 \x01(\x05R\x0bshortsCount\x12\x1d\n\nlong_value\x18\x07 \x01(\x01R\tlongValue\x12\x1f\n\x0bshort_value\x18\x08 \x01(\x01R\nshortValue\x12+\n\x11starting_exposure\x18\t \x01(\x01R\x10startingExposure\x12\'\n\x0fending_exposure\x18\n \x01(\x01R\x0eendingExposure\x12#\n\rlong_exposure\x18\x0b \x01(\x01R\x0clongExposure\x12%\n\x0eshort_exposure\x18\x0c \x01(\x01R\rshortExposure\x12!\n\x0ccapital_used\x18\r \x01(\x01R\x0bcapitalUsed\x12%\n\x0egross_leverage\x18\x0e \x01(\x01R\rgrossLeverage\x12!\n\x0cnet_leverage\x18\x0f \x01(\x01R\x0bnetLeverage\x12%\n\x0estarting_value\x18\x10 \x01(\x01R\rstartingValue\x12!\n\x0cending_value\x18\x11 \x01(\x01R\x0bendingValue\x12#\n\rstarting_cash\x18\x12 \x01(\x01R\x0cstartingCash\x12\x1f\n\x0bending_cash\x18\x13 \x01(\x01R\nendingCash\x12!\n\x0cmax_drawdown\x18\x14 \x01(\x01R\x0bmaxDrawdown\x12!\n\x0cmax_leverage\x18\x15 \x01(\x01R\x0bmaxLeverage\x12#\n\rexcess_return\x18\x16 \x01(\x01R\x0cexcessReturn\x124\n\x16treasury_period_return\x18\x17 \x01(\x01R\x14treasuryPeriodReturn\x126\n\x17algorithm_period_return\x18\x18 \x01(\x01R\x15algorithmPeriodReturn\x12,\n\x0falgo_volatility\x18\x19 \x01(\x01H\x00R\x0ealgoVolatility\x88\x01\x01\x12\x1b\n\x06sharpe\x18\x1a \x01(\x01H\x01R\x06sharpe\x88\x01\x01\x12\x1d\n\x07sortino\x18\x1b \x01(\x01H\x02R\x07sortino\x88\x01\x01\x12;\n\x17benchmark_period_return\x18\x1c \x01(\x01H\x03R\x15benchmarkPeriodReturn\x88\x01\x01\x126\n\x14benchmark_volatility\x18\x1d \x01(\x01H\x04R\x13benchmarkVolatility\x88\x01\x01\x12\x19\n\x05alpha\x18\x1e \x01(\x01H\x05R\x05alpha\x88\x01\x01\x12\x17\n\x04beta\x18\x1f \x01(\x01H\x06R\x04beta\x88\x01\x01\x12>\n\tpositions\x18  \x03(\x0b2 .foreverbull.finance.v1.PositionR\tpositionsB\x12\n\x10_algo_volatilityB\t\n\x07_sharpeB\n\n\x08_sortinoB\x1a\n\x18_benchmark_period_returnB\x17\n\x15_benchmark_volatilityB\x08\n\x06_alphaB\x07\n\x05_betaB3Z1github.com/lhjnilsson/foreverbull/pkg/pb/backtestb\x06proto3',
+    b'\n\'foreverbull/backtest/v1/execution.proto\x12\x17foreverbull.backtest.v1\x1a\x18foreverbull/common.proto\x1a\'foreverbull/finance/v1/marketdata.proto"\xa3\x03\n\tExecution\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n\x08backtest\x18\x02 \x01(\tR\x08backtest\x12\x18\n\x07session\x18\x03 \x01(\tR\x07session\x127\n\nstart_date\x18\x04 \x01(\x0b2\x18.foreverbull.common.DateR\tstartDate\x123\n\x08end_date\x18\x05 \x01(\x0b2\x18.foreverbull.common.DateR\x07endDate\x12<\n\x06result\x18\x07 \x01(\x0b2\x1f.foreverbull.backtest.v1.PeriodH\x00R\x06result\x88\x01\x01\x12\x18\n\x07notices\x18\x08 \x03(\tR\x07notices\x12G\n\x0creturn_basis\x18\t \x01(\x0e2$.foreverbull.backtest.v1.ReturnBasisR\x0breturnBasis\x126\n\x17foreign_dividends_gross\x18\n \x01(\x05R\x15foreignDividendsGrossB\t\n\x07_result"\xd1\x01\n\x11ExecutionFunction\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12T\n\nparameters\x18\x02 \x03(\x0b24.foreverbull.backtest.v1.ExecutionFunction.ParameterR\nparameters\x1aR\n\tParameter\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value\x12\x1d\n\nvalue_type\x18\x03 \x01(\tR\tvalueType"\xf1\x0b\n\x06Period\x12,\n\x04date\x18\x01 \x01(\x0b2\x18.foreverbull.common.DateR\x04date\x12\x10\n\x03PNL\x18\x02 \x01(\x01R\x03PNL\x12\x18\n\x07returns\x18\x03 \x01(\x01R\x07returns\x12\'\n\x0fportfolio_value\x18\x04 \x01(\x01R\x0eportfolioValue\x12\x1f\n\x0blongs_count\x18\x05 \x01(\x05R\nlongsCount\x12!\n\x0cshorts_count\x18\x06 \x01(\x05R\x0bshortsCount\x12\x1d\n\nlong_value\x18\x07 \x01(\x01R\tlongValue\x12\x1f\n\x0bshort_value\x18\x08 \x01(\x01R\nshortValue\x12+\n\x11starting_exposure\x18\t \x01(\x01R\x10startingExposure\x12\'\n\x0fending_exposure\x18\n \x01(\x01R\x0eendingExposure\x12#\n\rlong_exposure\x18\x0b \x01(\x01R\x0clongExposure\x12%\n\x0eshort_exposure\x18\x0c \x01(\x01R\rshortExposure\x12!\n\x0ccapital_used\x18\r \x01(\x01R\x0bcapitalUsed\x12%\n\x0egross_leverage\x18\x0e \x01(\x01R\rgrossLeverage\x12!\n\x0cnet_leverage\x18\x0f \x01(\x01R\x0bnetLeverage\x12%\n\x0estarting_value\x18\x10 \x01(\x01R\rstartingValue\x12!\n\x0cending_value\x18\x11 \x01(\x01R\x0bendingValue\x12#\n\rstarting_cash\x18\x12 \x01(\x01R\x0cstartingCash\x12\x1f\n\x0bending_cash\x18\x13 \x01(\x01R\nendingCash\x12!\n\x0cmax_drawdown\x18\x14 \x01(\x01R\x0bmaxDrawdown\x12!\n\x0cmax_leverage\x18\x15 \x01(\x01R\x0bmaxLeverage\x12#\n\rexcess_return\x18\x16 \x01(\x01R\x0cexcessReturn\x124\n\x16treasury_period_return\x18\x17 \x01(\x01R\x14treasuryPeriodReturn\x126\n\x17algorithm_period_return\x18\x18 \x01(\x01R\x15algorithmPeriodReturn\x12,\n\x0falgo_volatility\x18\x19 \x01(\x01H\x00R\x0ealgoVolatility\x88\x01\x01\x12\x1b\n\x06sharpe\x18\x1a \x01(\x01H\x01R\x06sharpe\x88\x01\x01\x12\x1d\n\x07sortino\x18\x1b \x01(\x01H\x02R\x07sortino\x88\x01\x01\x12;\n\x17benchmark_period_return\x18\x1c \x01(\x01H\x03R\x15benchmarkPeriodReturn\x88\x01\x01\x126\n\x14benchmark_volatility\x18\x1d \x01(\x01H\x04R\x13benchmarkVolatility\x88\x01\x01\x12\x19\n\x05alpha\x18\x1e \x01(\x01H\x05R\x05alpha\x88\x01\x01\x12\x17\n\x04beta\x18\x1f \x01(\x01H\x06R\x04beta\x88\x01\x01\x12>\n\tpositions\x18  \x03(\x0b2 .foreverbull.finance.v1.PositionR\tpositions\x12!\n\x0cprice_return\x18! \x01(\x01R\x0bpriceReturn\x12)\n\x10dividends_earned\x18" \x01(\x01R\x0fdividendsEarned\x129\n\x16benchmark_price_return\x18# \x01(\x01H\x07R\x14benchmarkPriceReturn\x88\x01\x01B\x12\n\x10_algo_volatilityB\t\n\x07_sharpeB\n\n\x08_sortinoB\x1a\n\x18_benchmark_period_returnB\x17\n\x15_benchmark_volatilityB\x08\n\x06_alphaB\x07\n\x05_betaB\x19\n\x17_benchmark_price_return*d\n\x0bReturnBasis\x12\x1c\n\x18RETURN_BASIS_UNSPECIFIED\x10\x00\x12\x16\n\x12RETURN_BASIS_TOTAL\x10\x01\x12\x1f\n\x1bRETURN_BASIS_ADJUSTED_CLOSE\x10\x02B3Z1github.com/lhjnilsson/foreverbull/pkg/pb/backtestb\x06proto3',
     [
         common_pb.desc(),
         marketdata_pb.desc(),
@@ -393,6 +476,7 @@ _DESC = file_desc(
         "ExecutionFunction": ExecutionFunction,
         "ExecutionFunction.Parameter": ExecutionFunction.Parameter,
         "Period": Period,
+        "ReturnBasis": ReturnBasis,
     },
 )
 
