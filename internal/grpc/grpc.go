@@ -253,6 +253,9 @@ func accountFromBearer(ctx context.Context, lookup BearerLookup) (auth.Account, 
 	}
 	account, err := lookup(ctx, strings.TrimSpace(strings.TrimPrefix(values[0], "Bearer ")))
 	if err != nil {
+		if errors.Is(err, auth.ErrSignInExpired) {
+			return auth.Account{}, status.Error(codes.Unauthenticated, usercopy.SignInExpired)
+		}
 		if errors.Is(err, auth.ErrUnauthorized) {
 			return auth.Account{}, status.Error(codes.Unauthenticated, "unauthorized")
 		}
