@@ -20,7 +20,8 @@ import {
   rowActive,
   rowClass,
 } from "../components/fb";
-import { lastStoredPeriod, portfolioSeries } from "../equity";
+import { hasStoredDate, lastStoredPeriod, portfolioSeries } from "../equity";
+import { type ResultCard, resultCard } from "../result-card";
 import type { Backtest, Execution, ExecutionResult, GetExecution } from "../types";
 import { postJson, useJson, type Load } from "../useJson";
 
@@ -297,10 +298,11 @@ function RunReport({
 }) {
   const periods = detail.state === "ready" && Array.isArray(detail.data.periods) ? detail.data.periods : [];
   const points = portfolioSeries(periods);
-  const last = lastStoredPeriod(periods) ?? (stored ? execution.result : undefined);
+  const provider = detail.state === "ready" ? (detail.data.provider ?? "") : "";
+  // Only the GET periods carry the first open and every session's positions,
+  // so the list row's last result never stands in for the card.
+  const card = resultCard({ stored: periods.filter(hasStoredDate), benchmark, provider });
   const id = execution.id ?? "";
-  // benchmark_period_return is a fraction. It stays off the portfolio-value axis.
-  const benchmarkReturn = last?.benchmarkPeriodReturn;
 
   return (
     <div className="grid gap-8">
@@ -323,19 +325,9 @@ function RunReport({
           </a>
         ) : null}
       </div>
-      {last ? (
-        <div className="grid grid-cols-2 gap-x-8 gap-y-5 border-y py-6 md:grid-cols-4">
-          {typeof last.sharpe === "number" ? <Metric label="Sharpe" value={last.sharpe.toFixed(2)} /> : null}
-          {typeof last.maxDrawdown === "number" ? <Metric label="Max drawdown" value={pct(last.maxDrawdown)} /> : null}
-          {typeof last.portfolioValue === "number" ? <Metric label="Portfolio value" value={num(last.portfolioValue)} /> : null}
-          {typeof last.endingValue === "number" ? <Metric label="End value" value={num(last.endingValue)} /> : null}
-          {typeof benchmarkReturn === "number" ? (
-            <Metric label={benchmark || "Benchmark"} value={pct(benchmarkReturn)} />
-          ) : null}
-        </div>
-      ) : detail.state === "loading" ? null : (
-        <p className="text-muted-foreground">No result stored for this run.</p>
-      )}
+      {card?.ok ? <ResultCardView card={card.card} /> : null}
+      {card && !card.ok ? <p className="text-muted-foreground">{card.message}</p> : null}
+      {!card && detail.state === "ready" ? <p className="text-muted-foreground">No result stored for this run.</p> : null}
       {detail.state === "loading" ? (
         <p className="flex items-center gap-2 text-muted-foreground">
           <LoaderCircle className="animate-spin motion-reduce:animate-none" size={16} aria-hidden />
@@ -353,11 +345,32 @@ function RunReport({
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function ResultCardView({ card }: { card: ResultCard }) {
   return (
-    <div className="py-1">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-2 font-mono text-2xl font-medium">{value}</div>
+    <div className="grid gap-4 border-y py-6">
+      <dl className="grid grid-cols-2 gap-x-8 gap-y-5">
+        {card.rows.flatMap((row) =>
+          row.map((cell, index) => (
+            <Metric key={cell.label} label={cell.label} value={cell.value} first={index === 0} />
+          )),
+        )}
+      </dl>
+      {card.noTrades ? (
+        <div className="text-muted-foreground">
+          {card.noTrades.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Metric({ label, value, first }: { label: string; value: string; first: boolean }) {
+  return (
+    <div className={`py-1 ${first ? "col-start-1" : ""}`}>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="mt-2 font-mono text-2xl font-medium">{value}</dd>
     </div>
   );
 }
