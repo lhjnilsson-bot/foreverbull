@@ -180,8 +180,8 @@
     {
       "id": 21,
       "type": "stat",
-      "title": "Return",
-      "description": "Latest period return. A fraction: 0.01 is 1%. Green when positive, red when negative.",
+      "title": "Total return · Price return",
+      "description": "Return from the run's start to the latest close. Total return counts dividend cash; price return leaves it out. A fraction: 0.01 is 1%. Green when positive, red when negative. A total-return run counts dividends paid on the ex-date: the cash lands then, not on the pay date. A stooq run has one adjusted-close return (dividends inside prices) and no price return.",
       "gridPos": {
         "h": 5,
         "w": 6,
@@ -228,7 +228,7 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value",
+        "textMode": "value_and_name",
         "wideLayout": true
       },
       "targets": [
@@ -244,7 +244,10 @@
           },
           "metrics": [
             {
-              "name": "returns"
+              "name": "total_return"
+            },
+            {
+              "name": "price_return"
             }
           ]
         }
@@ -608,8 +611,8 @@
     {
       "id": 7,
       "type": "barchart",
-      "title": "Returns",
-      "description": "Period returns as bars. Green when positive, red when negative. A fraction: 0.01 is 1%. Not a line, and not on the portfolio value axis.",
+      "title": "Daily returns",
+      "description": "Each period's total return and price return as bars, side by side. Green when positive, red when negative. A fraction: 0.01 is 1%. Not a line, and not on the portfolio value axis. A total-return run counts dividends paid on the ex-date: the cash lands then, not on the pay date. A stooq run has one adjusted-close return (dividends inside prices) and no price return.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -676,7 +679,7 @@
           ],
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": false
+          "showLegend": true
         },
         "orientation": "auto",
         "showValue": "never",
@@ -702,6 +705,9 @@
           "metrics": [
             {
               "name": "returns"
+            },
+            {
+              "name": "price_returns"
             }
           ]
         }
@@ -710,8 +716,8 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "Benchmark return",
-      "description": "Cumulative benchmark period return, on its own panel. A fraction: 0.01 is 1%. Not on the portfolio value axis.",
+      "title": "Benchmark total return · price return",
+      "description": "Cumulative benchmark return, total (close plus each dividend on its ex-date) and price (close to close), on its own panel. A fraction: 0.01 is 1%. Not on the portfolio value axis. A stooq run has one adjusted-close benchmark return.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -725,8 +731,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
-            "fixedColor": "orange"
+            "mode": "palette-classic"
           },
           "custom": {
             "axisBorderShow": false,
@@ -804,6 +809,9 @@
           "metrics": [
             {
               "name": "benchmark"
+            },
+            {
+              "name": "benchmark_price_return"
             }
           ]
         }

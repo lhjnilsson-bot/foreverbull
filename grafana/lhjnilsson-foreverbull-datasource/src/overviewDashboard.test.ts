@@ -10,6 +10,7 @@ interface DashboardTarget {
   queryType?: string;
   backtest?: string;
   execution?: { id?: string };
+  metrics?: Array<{ name?: string }>;
 }
 
 interface DashboardPanel {
@@ -61,7 +62,7 @@ describe('backtest overview dashboard', () => {
     expect(overview.raw).toContain('"value": "End"');
     expect(overview.raw).toContain('"value": "Start value"');
     expect(overview.raw).toContain('"value": "End value"');
-    expect(overview.raw).toContain('"value": "Return"');
+    expect(overview.raw).toContain('"value": "Total return"');
     expect(overview.raw).toContain('"value": "Benchmark"');
     expect(overview.raw).toContain('"value": "Sharpe"');
     expect(overview.raw).toContain('"value": "Sortino"');
@@ -73,7 +74,6 @@ describe('backtest overview dashboard', () => {
     expect(overview.raw).not.toContain('Start date');
     expect(overview.raw).not.toContain('End date');
     expect(overview.raw).not.toContain('Algorithm period return');
-    expect(overview.raw).not.toContain('Total return');
     const targets = (overview.json.panels ?? []).flatMap((panel) => panel.targets ?? []);
     expect(targets.length).toBeGreaterThan(0);
     for (const target of targets) {
@@ -90,5 +90,17 @@ describe('backtest overview dashboard', () => {
     const link = (execution.json.links ?? []).find((item) => item.url === '/d/fb-backtest-overview');
     expect(link?.title).toBe('Backtest overview');
     expect(execution.raw).toContain('ee9ep4jxtwkcgf');
+  });
+
+  it('shows total and price return side by side on the run page, the benchmark too', () => {
+    const metrics = (title: string) =>
+      (execution.json.panels ?? [])
+        .find((panel) => panel.title === title)
+        ?.targets?.flatMap((target) => (target.metrics ?? []).map((metric) => metric.name));
+    expect(metrics('Total return · Price return')).toEqual(['total_return', 'price_return']);
+    expect(metrics('Daily returns')).toEqual(['returns', 'price_returns']);
+    expect(metrics('Benchmark total return · price return')).toEqual(['benchmark', 'benchmark_price_return']);
+    expect(execution.raw).toContain('dividends paid on the ex-date');
+    expect(execution.raw).toContain('adjusted-close return (dividends inside prices)');
   });
 });
