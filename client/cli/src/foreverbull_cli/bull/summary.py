@@ -172,6 +172,12 @@ def held_no_position(periods: list[execution_pb.Period]) -> bool:
     return active_day_count(periods) == 0
 
 
+def no_trades_line(day_count: int) -> str:
+    if day_count == 1:
+        return "No trades: the strategy held no position on its 1 trading day."
+    return f"No trades: the strategy held no position on any of the {day_count} trading days."
+
+
 def metrics_table(benchmark: str, periods: list[execution_pb.Period]) -> Table:
     """Last-period scalars, the first session's open value, and days in a position.
 
@@ -228,10 +234,7 @@ def print_run_summary(
         console.print()
         if held_no_position(periods):
             # Without this line a tradeless run reads as a broken one: zeros and dashes, no reason.
-            console.print(
-                f"  No trades: the strategy held no position on any of the {len(periods)} trading days.",
-                highlight=False,
-            )
+            console.print(f"  {no_trades_line(len(periods))}", highlight=False)
             console.print(
                 "  Return and drawdown stay at 0 and Sharpe and Sortino are not defined.",
                 highlight=False,
