@@ -89,7 +89,35 @@ EXCEPTION
 END
 $$`
 
+// apiTokenClient names the `fbull login` client (cli@<host>). A NULL client is
+// a token minted from the web or `fbull token save`; it keeps a NULL
+// expires_at and no idle timeout.
+const apiTokenClient = `
+ALTER TABLE api_token ADD COLUMN IF NOT EXISTS client text
+	CHECK (client IS NULL OR char_length(client) BETWEEN 5 AND 64)`
+
+// cliAuthCodeTable holds one-time codes from the CLI authorize page. Only
+// SHA-256 of the code is stored. token_id is the token the code was exchanged
+// for, so a second use can revoke it; reused_at closes the race between that
+// second use and the first exchange writing token_id.
+const cliAuthCodeTable = `
+CREATE TABLE IF NOT EXISTS cli_auth_code (
+	code_hash bytea PRIMARY KEY,
+	account_id text NOT NULL REFERENCES account (id) ON DELETE CASCADE,
+	client text NOT NULL CHECK (char_length(client) BETWEEN 5 AND 64),
+	scope text NOT NULL CHECK (scope IN ('read', 'write')),
+	code_challenge text NOT NULL,
+	redirect_uri text NOT NULL,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	expires_at timestamptz NOT NULL,
+	used_at timestamptz,
+	reused_at timestamptz,
+	token_id text REFERENCES api_token (id) ON DELETE SET NULL
+)`
+
 const (
+	apiTokenExpiresIndex       = `CREATE INDEX IF NOT EXISTS api_token_expires_at_idx ON api_token (expires_at) WHERE expires_at IS NOT NULL`
+	cliAuthCodeExpiresIndex    = `CREATE INDEX IF NOT EXISTS cli_auth_code_expires_at_idx ON cli_auth_code (expires_at)`
 	apiTokenAccountIndex       = `CREATE INDEX IF NOT EXISTS api_token_account_id_idx ON api_token (account_id)`
 	browserSessionIndex        = `CREATE INDEX IF NOT EXISTS browser_session_account_id_idx ON browser_session (account_id)`
 	browserSessionExpiresIndex = `CREATE INDEX IF NOT EXISTS browser_session_expires_at_idx ON browser_session (expires_at)`
@@ -133,10 +161,14 @@ func Migrate(ctx context.Context, conn postgres.Query) error {
 		{"api_token", apiTokenTable},
 		{"api_token_scope", apiTokenScopeColumn},
 		{"api_token_scope_check", apiTokenScopeCheck},
+		{"api_token_client", apiTokenClient},
+		{"cli_auth_code", cliAuthCodeTable},
 		{"oauth_state", oauthStateTable},
 		{"oauth_state_verifier", oauthStateVerifier},
 		{"domain_grant", domainGrantTable},
 		{"api_token_account_id_idx", apiTokenAccountIndex},
+		{"api_token_expires_at_idx", apiTokenExpiresIndex},
+		{"cli_auth_code_expires_at_idx", cliAuthCodeExpiresIndex},
 		{"browser_session_account_id_idx", browserSessionIndex},
 		{"browser_session_last_seen_at", browserSessionLastSeen},
 		{"browser_session_expires_at_idx", browserSessionExpiresIndex},
