@@ -436,7 +436,7 @@ class GetResultRequest(Message[_GetResultRequestFields]):
             bucket: str
             object: str
 
-_GetResultResponseFields: TypeAlias = Literal["periods"]
+_GetResultResponseFields: TypeAlias = Literal["periods", "foreign_dividends_gross"]
 
 class GetResultResponse(Message[_GetResultResponseFields]):
     """
@@ -449,9 +449,15 @@ class GetResultResponse(Message[_GetResultResponseFields]):
             ```proto
             repeated foreverbull.backtest.v1.Period periods = 1;
             ```
+        foreign_dividends_gross:
+            Foreign dividends the run booked at their gross amount.
+
+            ```proto
+            int32 foreign_dividends_gross = 2;
+            ```
     """
 
-    __slots__ = ("periods",)
+    __slots__ = ("periods", "foreign_dividends_gross")
 
     if TYPE_CHECKING:
 
@@ -459,14 +465,16 @@ class GetResultResponse(Message[_GetResultResponseFields]):
             self,
             *,
             periods: list[Period] | None = None,
+            foreign_dividends_gross: int = 0,
         ) -> None:
             pass
 
         periods: list[Period]
+        foreign_dividends_gross: int
 
 
 _DESC = file_desc(
-    b'\n,foreverbull/backtest/service/v1/engine.proto\x12\x1fforeverbull.backtest.service.v1\x1a&foreverbull/backtest/v1/backtest.proto\x1a\'foreverbull/backtest/v1/execution.proto\x1a\'foreverbull/finance/v1/marketdata.proto"J\n\x18DownloadIngestionRequest\x12\x16\n\x06bucket\x18\x01 \x01(\tR\x06bucket\x12\x16\n\x06object\x18\x02 \x01(\tR\x06object"\x1b\n\x19DownloadIngestionResponse"\x9e\x01\n\rIngestRequest\x12=\n\x08backtest\x18\x01 \x01(\x0b2!.foreverbull.backtest.v1.BacktestR\x08backtest\x12\x1b\n\x06bucket\x18\x02 \x01(\tH\x00R\x06bucket\x88\x01\x01\x12\x1b\n\x06object\x18\x03 \x01(\tH\x01R\x06object\x88\x01\x01B\t\n\x07_bucketB\t\n\x07_object"*\n\x0eIngestResponse\x12\x18\n\x07notices\x18\x01 \x03(\tR\x07notices"#\n\x11NewSessionRequest\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id"(\n\x12NewSessionResponse\x12\x12\n\x04port\x18\x01 \x01(\x03R\x04port"t\n\x12RunBacktestRequest\x12@\n\texecution\x18\x01 \x01(\x0b2".foreverbull.backtest.v1.ExecutionR\texecution\x12\x1c\n\tbenchmark\x18\x02 \x01(\tR\tbenchmark"x\n\x13RunBacktestResponse\x12@\n\texecution\x18\x01 \x01(\x0b2".foreverbull.backtest.v1.ExecutionR\texecution\x12\x1f\n\x0bnum_periods\x18\x02 \x01(\x03R\nnumPeriods"\x19\n\x17GetCurrentPeriodRequest"\x8d\x01\n\x18GetCurrentPeriodResponse\x12\x1d\n\nis_running\x18\x01 \x01(\x08R\tisRunning\x12D\n\tportfolio\x18\x02 \x01(\x0b2!.foreverbull.finance.v1.PortfolioH\x00R\tportfolio\x88\x01\x01B\x0c\n\n_portfolio"V\n\x1dPlaceOrdersAndContinueRequest\x125\n\x06orders\x18\x01 \x03(\x0b2\x1d.foreverbull.finance.v1.OrderR\x06orders" \n\x1ePlaceOrdersAndContinueResponse"\xcc\x01\n\x10GetResultRequest\x12\x1c\n\texecution\x18\x01 \x01(\tR\texecution\x12U\n\x06upload\x18\x02 \x01(\x0b28.foreverbull.backtest.service.v1.GetResultRequest.UploadH\x00R\x06upload\x88\x01\x01\x1a8\n\x06Upload\x12\x16\n\x06bucket\x18\x01 \x01(\tR\x06bucket\x12\x16\n\x06object\x18\x02 \x01(\tR\x06objectB\t\n\x07_upload"N\n\x11GetResultResponse\x129\n\x07periods\x18\x01 \x03(\x0b2\x1f.foreverbull.backtest.v1.PeriodR\x07periods2\xfd\x02\n\x06Engine\x12\x8c\x01\n\x11DownloadIngestion\x129.foreverbull.backtest.service.v1.DownloadIngestionRequest\x1a:.foreverbull.backtest.service.v1.DownloadIngestionResponse"\x00\x12k\n\x06Ingest\x12..foreverbull.backtest.service.v1.IngestRequest\x1a/.foreverbull.backtest.service.v1.IngestResponse"\x00\x12w\n\nNewSession\x122.foreverbull.backtest.service.v1.NewSessionRequest\x1a3.foreverbull.backtest.service.v1.NewSessionResponse"\x002\xab\x04\n\rEngineSession\x12z\n\x0bRunBacktest\x123.foreverbull.backtest.service.v1.RunBacktestRequest\x1a4.foreverbull.backtest.service.v1.RunBacktestResponse"\x00\x12\x89\x01\n\x10GetCurrentPeriod\x128.foreverbull.backtest.service.v1.GetCurrentPeriodRequest\x1a9.foreverbull.backtest.service.v1.GetCurrentPeriodResponse"\x00\x12\x9b\x01\n\x16PlaceOrdersAndContinue\x12>.foreverbull.backtest.service.v1.PlaceOrdersAndContinueRequest\x1a?.foreverbull.backtest.service.v1.PlaceOrdersAndContinueResponse"\x00\x12t\n\tGetResult\x121.foreverbull.backtest.service.v1.GetResultRequest\x1a2.foreverbull.backtest.service.v1.GetResultResponse"\x00B;Z9github.com/lhjnilsson/foreverbull/pkg/pb/backtest/serviceb\x06proto3',
+    b'\n,foreverbull/backtest/service/v1/engine.proto\x12\x1fforeverbull.backtest.service.v1\x1a&foreverbull/backtest/v1/backtest.proto\x1a\'foreverbull/backtest/v1/execution.proto\x1a\'foreverbull/finance/v1/marketdata.proto"J\n\x18DownloadIngestionRequest\x12\x16\n\x06bucket\x18\x01 \x01(\tR\x06bucket\x12\x16\n\x06object\x18\x02 \x01(\tR\x06object"\x1b\n\x19DownloadIngestionResponse"\x9e\x01\n\rIngestRequest\x12=\n\x08backtest\x18\x01 \x01(\x0b2!.foreverbull.backtest.v1.BacktestR\x08backtest\x12\x1b\n\x06bucket\x18\x02 \x01(\tH\x00R\x06bucket\x88\x01\x01\x12\x1b\n\x06object\x18\x03 \x01(\tH\x01R\x06object\x88\x01\x01B\t\n\x07_bucketB\t\n\x07_object"*\n\x0eIngestResponse\x12\x18\n\x07notices\x18\x01 \x03(\tR\x07notices"#\n\x11NewSessionRequest\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id"(\n\x12NewSessionResponse\x12\x12\n\x04port\x18\x01 \x01(\x03R\x04port"t\n\x12RunBacktestRequest\x12@\n\texecution\x18\x01 \x01(\x0b2".foreverbull.backtest.v1.ExecutionR\texecution\x12\x1c\n\tbenchmark\x18\x02 \x01(\tR\tbenchmark"x\n\x13RunBacktestResponse\x12@\n\texecution\x18\x01 \x01(\x0b2".foreverbull.backtest.v1.ExecutionR\texecution\x12\x1f\n\x0bnum_periods\x18\x02 \x01(\x03R\nnumPeriods"\x19\n\x17GetCurrentPeriodRequest"\x8d\x01\n\x18GetCurrentPeriodResponse\x12\x1d\n\nis_running\x18\x01 \x01(\x08R\tisRunning\x12D\n\tportfolio\x18\x02 \x01(\x0b2!.foreverbull.finance.v1.PortfolioH\x00R\tportfolio\x88\x01\x01B\x0c\n\n_portfolio"V\n\x1dPlaceOrdersAndContinueRequest\x125\n\x06orders\x18\x01 \x03(\x0b2\x1d.foreverbull.finance.v1.OrderR\x06orders" \n\x1ePlaceOrdersAndContinueResponse"\xcc\x01\n\x10GetResultRequest\x12\x1c\n\texecution\x18\x01 \x01(\tR\texecution\x12U\n\x06upload\x18\x02 \x01(\x0b28.foreverbull.backtest.service.v1.GetResultRequest.UploadH\x00R\x06upload\x88\x01\x01\x1a8\n\x06Upload\x12\x16\n\x06bucket\x18\x01 \x01(\tR\x06bucket\x12\x16\n\x06object\x18\x02 \x01(\tR\x06objectB\t\n\x07_upload"\x86\x01\n\x11GetResultResponse\x129\n\x07periods\x18\x01 \x03(\x0b2\x1f.foreverbull.backtest.v1.PeriodR\x07periods\x126\n\x17foreign_dividends_gross\x18\x02 \x01(\x05R\x15foreignDividendsGross2\xfd\x02\n\x06Engine\x12\x8c\x01\n\x11DownloadIngestion\x129.foreverbull.backtest.service.v1.DownloadIngestionRequest\x1a:.foreverbull.backtest.service.v1.DownloadIngestionResponse"\x00\x12k\n\x06Ingest\x12..foreverbull.backtest.service.v1.IngestRequest\x1a/.foreverbull.backtest.service.v1.IngestResponse"\x00\x12w\n\nNewSession\x122.foreverbull.backtest.service.v1.NewSessionRequest\x1a3.foreverbull.backtest.service.v1.NewSessionResponse"\x002\xab\x04\n\rEngineSession\x12z\n\x0bRunBacktest\x123.foreverbull.backtest.service.v1.RunBacktestRequest\x1a4.foreverbull.backtest.service.v1.RunBacktestResponse"\x00\x12\x89\x01\n\x10GetCurrentPeriod\x128.foreverbull.backtest.service.v1.GetCurrentPeriodRequest\x1a9.foreverbull.backtest.service.v1.GetCurrentPeriodResponse"\x00\x12\x9b\x01\n\x16PlaceOrdersAndContinue\x12>.foreverbull.backtest.service.v1.PlaceOrdersAndContinueRequest\x1a?.foreverbull.backtest.service.v1.PlaceOrdersAndContinueResponse"\x00\x12t\n\tGetResult\x121.foreverbull.backtest.service.v1.GetResultRequest\x1a2.foreverbull.backtest.service.v1.GetResultResponse"\x00B;Z9github.com/lhjnilsson/foreverbull/pkg/pb/backtest/serviceb\x06proto3',
     [
         backtest_pb.desc(),
         execution_pb.desc(),

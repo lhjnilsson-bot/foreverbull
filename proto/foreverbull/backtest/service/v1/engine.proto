@@ -70,6 +70,8 @@ message GetResultRequest {
 
 message GetResultResponse {
   repeated foreverbull.backtest.v1.Period periods = 1;
+  // Foreign dividends the run booked at their gross amount.
+  int32 foreign_dividends_gross = 2;
 }
 
 service Engine {
