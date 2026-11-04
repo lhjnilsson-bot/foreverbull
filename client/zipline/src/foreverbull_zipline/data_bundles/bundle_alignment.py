@@ -14,6 +14,8 @@ from zipline.data.bundles.core import from_bundle_ingest_dirname
 from zipline.utils.calendar_utils import get_calendar
 from zipline.utils.paths import data_path
 
+from foreverbull_zipline.data_bundles.dividends import read_bundle_dividends
+from foreverbull_zipline.data_bundles.dividends import write_foreign_dividends
 from foreverbull_zipline.errors import PlainSentence
 
 
@@ -194,6 +196,9 @@ def rebuild_session_aligned_bundle(bundle_name: str, environ: Mapping[str, Any] 
     old_bundle = bundles.load(bundle_name, environ, None)
     frames: dict[int, pd.DataFrame] = {}
     try:
+        # The booked dividends come along unchanged. A bundle ingested
+        # before dividends has none, and stays one a run refuses.
+        dividends = read_bundle_dividends(old_bundle.adjustment_reader.conn)
         reader = old_bundle.equity_daily_bar_reader
         for sid in sorted(metadata["sid"].unique()):
             rows = metadata.loc[metadata["sid"] == sid]
@@ -232,7 +237,11 @@ def rebuild_session_aligned_bundle(bundle_name: str, environ: Mapping[str, Any] 
     ):
         daily_bar_writer.write(sorted(frames.items()))
         asset_db_writer.write(equities=metadata)
-        adjustment_writer.write()
+        if dividends is None:
+            adjustment_writer.write()
+            return
+        adjustment_writer.write(dividends=dividends.frame)
+        write_foreign_dividends(adjustment_writer.conn, dividends.foreign)
 
     bundles.register(bundle_name, reingest, calendar_name="XNYS")
     bundles.ingest(bundle_name, environ, pd.Timestamp.utcnow(), [], True)
