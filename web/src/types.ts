@@ -72,9 +72,15 @@ export type ExecutionResult = {
   PNL?: number;
   returns?: number;
   portfolioValue?: number;
+  longsCount?: number;
+  shortsCount?: number;
+  startingValue?: number;
   endingValue?: number;
+  startingCash?: number;
   maxDrawdown?: number;
+  algorithmPeriodReturn?: number;
   sharpe?: number;
+  sortino?: number;
   benchmarkPeriodReturn?: number;
   positions?: unknown[];
 };
@@ -92,4 +98,6 @@ export type Execution = {
 export type GetExecution = {
   execution?: Execution;
   periods?: ExecutionResult[];
+  // Copied onto the execution at create time. Empty only for rows older than the column.
+  provider?: string;
 };
