@@ -195,9 +195,9 @@ func invalidProviderTickerError(provider, symbol string) error {
 func ingestSymbol(ctx context.Context, ohlc *repository.OHLC, bars supplier.Marketdata,
 	provider, symbol string, start time.Time, end *time.Time,
 ) error {
-	err := ohlc.Sync(ctx, provider, symbol, start, end, func(from time.Time, to *time.Time) ([]*pb.OHLC, error) {
+	err := ohlc.SyncSource(ctx, provider, symbol, start, end, func(from time.Time, to *time.Time) ([]*pb.OHLC, error) {
 		return getOHLC(ctx, bars, symbol, from, to)
-	})
+	}, bars)
 	return logStoreError(err, "store bars")
 }
 

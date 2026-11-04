@@ -9,7 +9,7 @@ import (
 )
 
 // This file is the one place for the user-facing cause and next-step
-// wording of a failed price download or listing lookup. Backtest create and
+// wording of a failed price or dividend download or listing lookup. Backtest create and
 // the DownloadHistoricalData STATUS_ERROR build their sentences from it.
 
 // Form is where a step is shown: the command it says to run again, how it
@@ -190,4 +190,116 @@ func DownloadFailure(rsp *servicePb.DownloadHistoricalDataResponse) error {
 		return nil
 	}
 	return &BarsStatusError{Provider: status.GetProvider(), Symbol: rsp.GetSymbol(), Status: int(status.GetHttpStatus())}
+}
+
+// DividendFetchKind is why a symbol's dividends failed.
+type DividendFetchKind int
+
+const (
+	// DividendHTTPStatus is an HTTP error status from the provider, in Status.
+	DividendHTTPStatus DividendFetchKind = iota + 1
+	// DividendNoAnswer is a provider that didn't answer.
+	DividendNoAnswer
+	// DividendUnreadable is an answer that couldn't be read.
+	DividendUnreadable
+	// DividendInvalid is dividends that can't be used, such as an amount
+	// of 0 or a currency other than USD. The finance service's own sentence
+	// names each one; this cause doesn't.
+	DividendInvalid
+)
+
+// DividendFetchError is a symbol whose dividends failed, so its prices
+// weren't stored either. It crosses DownloadHistoricalData as
+// DownloadHistoricalDataResponse.dividend_failure, and DividendFailure reads
+// it back, so callers match on the type, not on the text. Neither carries
+// the provider's text; that is logged.
+type DividendFetchError struct {
+	Provider string
+	Symbol   string
+	Kind     DividendFetchKind
+	// Status is the HTTP status of a DividendHTTPStatus failure.
+	Status int
+}
+
+func (e *DividendFetchError) provider() string {
+	return strings.ToLower(strings.TrimSpace(e.Provider))
+}
+
+// Cause is the phrase that names what went wrong. It never names the symbol.
+// An HTTP status has the same cause as a price download's.
+func (e *DividendFetchError) Cause() string {
+	provider := e.provider()
+	switch e.Kind {
+	case DividendHTTPStatus:
+		return (&BarsStatusError{Provider: provider, Status: e.Status}).Cause()
+	case DividendNoAnswer:
+		return provider + " didn't answer"
+	case DividendInvalid:
+		return provider + " sent dividends that can't be used"
+	case DividendUnreadable:
+		return provider + "'s answer couldn't be read"
+	default:
+		return provider + "'s answer couldn't be read"
+	}
+}
+
+// Step is the next step the cause offers, the same as a price download's
+// for an HTTP status.
+func (e *DividendFetchError) Step() Step {
+	switch e.Kind {
+	case DividendHTTPStatus:
+		return (&BarsStatusError{Provider: e.Provider, Status: e.Status}).Step()
+	case DividendNoAnswer:
+		return StepNetwork
+	case DividendUnreadable, DividendInvalid:
+		return StepParse
+	default:
+		return StepParse
+	}
+}
+
+// Error is the DownloadHistoricalData STATUS_ERROR sentence.
+func (e *DividendFetchError) Error() string {
+	return fmt.Sprintf("foreverbull couldn't download dividends for %s from %s: %s. Its prices weren't saved either. %s",
+		e.Symbol, e.provider(), e.Cause(), StepText(e.Step(), DownloadForm))
+}
+
+var dividendFailureKinds = map[DividendFetchKind]servicePb.DownloadHistoricalDataResponse_DividendFailure_Kind{
+	DividendHTTPStatus: servicePb.DownloadHistoricalDataResponse_DividendFailure_KIND_HTTP_STATUS,
+	DividendNoAnswer:   servicePb.DownloadHistoricalDataResponse_DividendFailure_KIND_NO_ANSWER,
+	DividendUnreadable: servicePb.DownloadHistoricalDataResponse_DividendFailure_KIND_UNREADABLE,
+	DividendInvalid:    servicePb.DownloadHistoricalDataResponse_DividendFailure_KIND_INVALID,
+}
+
+// DividendFailureProto is the proto form of e, for a STATUS_ERROR response.
+func (e *DividendFetchError) DividendFailureProto() *servicePb.DownloadHistoricalDataResponse_DividendFailure {
+	return &servicePb.DownloadHistoricalDataResponse_DividendFailure{
+		Provider:   e.Provider,
+		Kind:       dividendFailureKinds[e.Kind],
+		HttpStatus: int32(e.Status), //nolint:gosec // an HTTP status code fits in int32
+	}
+}
+
+// DividendFailure is the typed dividend error of a STATUS_ERROR response: a
+// *DividendFetchError when dividend_failure is set with a known kind,
+// otherwise nil.
+func DividendFailure(rsp *servicePb.DownloadHistoricalDataResponse) error {
+	if rsp.GetStatus() != servicePb.DownloadHistoricalDataResponse_STATUS_ERROR {
+		return nil
+	}
+	failure := rsp.GetDividendFailure()
+	if failure == nil {
+		return nil
+	}
+	for kind, proto := range dividendFailureKinds {
+		if proto != failure.GetKind() {
+			continue
+		}
+		status := int(failure.GetHttpStatus())
+		if kind == DividendHTTPStatus && (status < 300 || status > 599) {
+			return nil
+		}
+		return &DividendFetchError{Provider: failure.GetProvider(), Symbol: rsp.GetSymbol(), Kind: kind, Status: status}
+	}
+	return nil
 }
