@@ -263,20 +263,27 @@ its `owner_id` is not the owner stored on that row.
 Session secrets are kept in the broker process. Run one broker replica. A
 second replica does not have the map and refuses a session it did not mint.
 
-CLI tokens last until they are revoked. `expires_at` is checked when it is
-set, and mint does not set it. Mint scope is `read` or `write`. An omitted
-scope is `write`. A `read` token may call only the read RPCs. `account
-rotate` replaces the password hash and deletes that account's browser
-sessions. It has no current session to keep. API tokens stay until they are
-revoked, so a forgotten password does not remove the Grafana token. Behind
+A token from `fbull login` ends 30 days after sign-in, or after 14 days
+without use, whichever comes first. A token minted with `POST
+/api/auth/tokens` has no expiry and lasts until it is revoked. Mint scope is
+`read` or `write`. An omitted scope is `write`. A `read` token may call only
+the read RPCs. `account rotate` replaces the password hash and revokes every
+browser session and every token of that account, minted tokens included. It
+has no current session to keep. A role downgrade and Sign out everywhere on
+the account page revoke the same set. Behind
 TLS the chart sets `AUTH_COOKIE_SECURE=true` when `ingress.tls` is true. The
 session cookie name is then `__Host-fb_session`. Local Kind is plain HTTP,
 so the chart leaves the flag unset.
 
 Broker gRPC inside the cluster is plaintext. Grafana dials
 `foreverbull:50055` and its NetworkPolicy allows only DNS and that port.
-Set `GRAFANA_BROKER_TOKEN` to a `read` token an editor mints. The chart does
-not create the token. Do not publish `50055` or `8080` beyond the cluster.
+Set `GRAFANA_BROKER_TOKEN` to a `read` token minted from a dedicated editor
+account that no person signs in with. A token minted from a person's account
+is revoked when that person rotates their password, loses the editor role, or
+uses Sign out everywhere, and Grafana then loses the broker. A token from a
+dedicated editor account sees only that account's rows, not every row the way
+an admin-minted token does, so Grafana dashboards may show less than before.
+The chart does not create the token. Do not publish `50055` or `8080` beyond the cluster.
 A token on a path you do not trust can be read.
 
 ## Upgrading an existing remote install
