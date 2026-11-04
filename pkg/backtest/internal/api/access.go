@@ -337,6 +337,12 @@ func (bs *BacktestServer) getExecutionAuthed(ctx context.Context, req *servicePb
 		return nil, fmt.Errorf("error getting execution notices: %w", err)
 	}
 	execution.Notices = notices
+	basis, foreignGross, err := storage.GetReturnBasis(ctx, req.GetExecutionId())
+	if err != nil {
+		return nil, fmt.Errorf("error getting execution return basis: %w", err)
+	}
+	execution.ReturnBasis = basis
+	execution.ForeignDividendsGross = foreignGross
 	return &servicePb.GetExecutionResponse{
 		Execution: execution,
 		Periods:   periods,
