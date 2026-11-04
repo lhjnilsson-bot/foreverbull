@@ -33,7 +33,10 @@ from foreverbull_cli.bull.etf_catalog import etf_by_name
 from foreverbull_cli.bull.etf_catalog import etf_catalog
 from foreverbull_cli.bull.etf_catalog import known_etf_names
 from foreverbull_cli.bull.summary import distinguishing_execution_ids
+from foreverbull_cli.bull.summary import dividend_lines
+from foreverbull_cli.bull.summary import format_percent
 from foreverbull_cli.bull.summary import print_run_summary
+from foreverbull_cli.bull.summary import return_labels
 from foreverbull_cli.output import LiveProgress
 from foreverbull_cli.output import console
 from foreverbull_cli.output import execution_link
@@ -834,6 +837,7 @@ def run(
         start_iso=start_iso,
         end_iso=end_iso,
         execution_id=execution_id,
+        execution=stored,
         periods=list(periods),
         notices=list(stored.notices),
         resolutions=later_tickers(entity),
@@ -909,3 +913,12 @@ def execution(
             format_optional_float(period, "sortino"),
         )
     console.print(table)
+    # The run's returns under the table: two more columns would not fit
+    # in 80 columns next to the ratios.
+    if periods:
+        last = periods[-1]
+        values = [format_percent(last.algorithm_period_return), format_percent(last.price_return)]
+        returns = " · ".join(f"{label} {value}" for label, value in zip(return_labels(entity), values, strict=False))
+        console.print(returns, markup=False, highlight=False, soft_wrap=True)
+    for line in dividend_lines(entity, list(periods)):
+        console.print(line, markup=False, highlight=False, soft_wrap=True)
