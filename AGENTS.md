@@ -300,6 +300,7 @@ Go server defaults are in `internal/environment/env.go`. Empty optional vars are
 | `VERSION` | Image tag for `fbenv` / chart `global.imageTag` (`ghcr.io/lhjnilsson/{foreverbull,zipline,fb-grafana}`; prefix is CLI `IMAGE_REPOSITORY`, passed as chart `global.imageRepository`). Unset or `latest`: published nightly channel on public GHCR. `local`: images from `task build`. `fbenv` refuses any other value. Image-pull fails-before-changes is local-Kind only; remote nodes pull after Helm runs |
 | `FOREVERBULL_BROKER_ADDRESS` | Python stubs/CLI broker `host:port` (highest priority) |
 | `FOREVERBULL_CONFIG` | Explicit cluster config YAML path |
+| `FOREVERBULL_BROKER_URL` | Broker HTTP origin for `fbull login` / `logout`. Default `http://localhost:8080` on local Kind; remote reads `remote.broker_url`. Must be `https://` unless the host is `127.0.0.1` or `localhost` |
 | `DATABASE_URL` | Zipline ingest and the pytest plugin (Testcontainers). Strategy workers do not receive it |
 | `BROKER_HOSTNAME` | Worker/NNG hostname (default `127.0.0.1`; in-cluster workers get `SERVER_ADDRESS`) |
 | `BROKER_PORT` | Worker broker gRPC port; in-cluster workers get `GRPC_PORT` (`50055`) |

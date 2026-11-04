@@ -102,9 +102,30 @@ uv run fbull token save
 uv run fbull token save --force
 ```
 
-`token save` reads stdin and writes `~/.foreverbull/token` with mode `0600`. It does not take the token as an argument. If the file already exists, the command refuses unless `--force` is passed. A mode looser than `0600` is refused. The error prints the path, not the contents.
+`token save` reads stdin and writes `~/.foreverbull/token` with mode `0600`. It does not take the token as an argument. If the file already exists, the command refuses unless `--force` is passed. A saved token has no expiry. It replaces a `fbull login` token and removes its `token.meta`.
 
-When the broker has authentication on, set `GRAFANA_BROKER_TOKEN` on the Grafana deployment from a Secret you create. The chart does not generate that token and does not ship a default. Mint it as an editor with scope `read` (`{"name":"grafana","scope":"read"}` on `POST /api/auth/tokens`). A `read` token may call only the read RPCs. An omitted scope is `write`. A token minted by the admin shows every row. A viewer cannot mint a token. Leave `GRAFANA_BROKER_TOKEN` unset while `AUTH_ENABLED` is false: the plugin then dials with no metadata. Grafana reaches the broker at `foreverbull:50055` without TLS. Its NetworkPolicy allows only DNS and that port. Do not publish `50055` beyond the cluster. Do not put the user bearer or the session secret on a worker pod. `fbenv` does not set `AUTH_ENABLED`.
+`~/.foreverbull` is `0700` and `token` and `token.meta` are `0600`, owned by you. Both are written to a temporary `0600` file and renamed into place. A token file, metadata file, or directory with group or other bits, another owner, or a symlink is refused. The error names the path and the `chmod` that fixes it, not the contents. There is no keyring.
+
+The broker gRPC port is plaintext. `fbull` refuses to send a token to any host other than `127.0.0.1`, `::1`, or `localhost` (the Kind host port) with ``fbull won't send your token to <host> without encryption. Use an https:// address, or, for a local install, 127.0.0.1 or localhost.`` A remote broker needs gRPC TLS before a token can be used against it.
+
+### Sign in with the browser
+
+```bash
+uv run fbull login
+uv run fbull logout
+uv run fbull logout --local
+uv run fbull logout --all
+```
+
+`fbull login` needs `AUTH_ENABLED=true` on the broker. It listens on `127.0.0.1` on a random port, opens `<broker>/cli/authorize` in your browser, and waits up to five minutes for one request on `http://127.0.0.1:<port>/callback`. The page uses your web sign-in (password or GitHub), asks "Let fbull sign in?", shows the computer's host name, the scope, and your login, and issues nothing until you press Approve. Deny ends the sign-in. The broker accepts no other redirect host, path, or scheme.
+
+The flow is PKCE (S256) with a `state` that `fbull` checks. The code from Approve is single use and valid for 60 seconds. `fbull` exchanges it with a POST, and the token comes back in the response body, never in a URL. A second use of a code revokes the token the first one issued. The exchange is rate limited per address and per account. The broker URL is `http://localhost:8080` on local Kind, `remote.broker_url` in the cluster config on a remote cluster, or `FOREVERBULL_BROKER_URL`. It must be `https://` unless the host is `127.0.0.1` or `localhost`. When no browser can be opened, `fbull login` fails and points to `fbull token save`.
+
+The token has scope `write`, or `read` for a viewer. A pending account cannot approve. It is saved to `~/.foreverbull/token`, with its expiry, client, and broker (not the secret) in `~/.foreverbull/token.meta`. After sign-in, `fbull` prints that it's valid until a time 30 days out, or until it goes unused for 14 days, whichever comes first. Then every command fails with ``Your sign-in has expired. Run `fbull login` to sign in again.``
+
+`fbull logout` revokes the token on the broker, then deletes both files. When the broker can't be reached or refuses the revoke, it exits non-zero, keeps the files, and says the token is still valid until its expiry, or until it goes unused for 14 days, whichever comes first. When the broker named in `token.meta` answers in its own JSON (`sign_in_expired` or `unauthorized`) that the token is already expired or revoked, the files are deleted. Any other 401, or a 401 for a token saved with `fbull token save`, keeps them. `fbull` doesn't follow HTTP redirects from the broker, so the bearer never goes to another address. `--local` deletes the files only, and the token stays valid on the broker. `--all` revokes every token and browser session of your account, saved tokens included. The web UI's account page has the same Sign out everywhere button, which asks for confirmation first.
+
+When the broker has authentication on, set `GRAFANA_BROKER_TOKEN` on the Grafana deployment from a Secret you create. The chart does not generate that token and does not ship a default. Mint it from a dedicated editor account that no person signs in with, with scope `read` (`{"name":"grafana","scope":"read"}` on `POST /api/auth/tokens`). A token minted from a person's account is revoked when that person rotates their password, loses the editor role, or uses Sign out everywhere. A token from a dedicated editor account sees only that account's rows, not every row the way an admin-minted token does, so Grafana dashboards may show less than before. A `read` token may call only the read RPCs. An omitted scope is `write`. A token minted by the admin shows every row. A viewer cannot mint a token. Leave `GRAFANA_BROKER_TOKEN` unset while `AUTH_ENABLED` is false: the plugin then dials with no metadata. Grafana reaches the broker at `foreverbull:50055` without TLS. Its NetworkPolicy allows only DNS and that port. Do not publish `50055` beyond the cluster. Do not put the user bearer or the session secret on a worker pod. `fbenv` does not set `AUTH_ENABLED`.
 
 ## Accounts
 
@@ -115,7 +136,7 @@ foreverbull account create --username reader
 foreverbull account rotate --username reader
 ```
 
-🔒️ `account create` inserts role `editor`. There is no `--role` flag. Passing `--role`, including `--role viewer` or `--role admin`, is an error that says role changes are SQL. `account rotate` replaces `password_hash` and deletes that account's browser sessions. It does not change `role` and it does not revoke API tokens. No command and no HTTP route changes an existing `account.role`. GitHub first sign-in inserts `pending`. The enable boot inserts `admin` from the password file.
+🔒️ `account create` inserts role `editor`. There is no `--role` flag. Passing `--role`, including `--role viewer` or `--role admin`, is an error that says role changes are SQL. `account rotate` replaces `password_hash`, deletes that account's browser sessions, and revokes all of its API tokens, saved tokens and a Grafana `read` token included. It does not change `role`. Moving `account.role` down (for example `editor` to `viewer`) also revokes every token and session of that account. No command and no HTTP route changes an existing `account.role`. GitHub first sign-in inserts `pending`. The enable boot inserts `admin` from the password file.
 
 The password is read from stdin with echo off, length 12 to 128. It is not a flag and not an environment variable, and it is not written to a log. Stdout is the account id. A duplicate username is an error and does not change the hash. The command uses `POSTGRES_URL`.
 
