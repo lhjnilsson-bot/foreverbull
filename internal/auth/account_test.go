@@ -97,6 +97,10 @@ func TestCreateEditorHashesAndRotateKeepsRole(t *testing.T) {
 		INSERT INTO api_token (account_id, token_hash, hint, name)
 		VALUES ($1, $2, 'fb_abc123', 'laptop')`, id, []byte{4, 5, 6})
 	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO api_token (account_id, token_hash, hint, name)
+		VALUES ($1, $2, 'fb_def456', 'other-laptop')`, otherID, []byte{7, 8, 9})
+	require.NoError(t, err)
 
 	rotatedID, err := RotatePassword(ctx, pool, username, rotated)
 	require.NoError(t, err)
@@ -116,7 +120,10 @@ func TestCreateEditorHashesAndRotateKeepsRole(t *testing.T) {
 	var tokenOpen bool
 	err = pool.QueryRow(ctx, `SELECT revoked_at IS NULL FROM api_token WHERE account_id = $1`, id).Scan(&tokenOpen)
 	require.NoError(t, err)
-	require.True(t, tokenOpen)
+	require.False(t, tokenOpen, "a password rotation revokes the account's tokens")
+	err = pool.QueryRow(ctx, `SELECT revoked_at IS NULL FROM api_token WHERE account_id = $1`, otherID).Scan(&tokenOpen)
+	require.NoError(t, err)
+	require.True(t, tokenOpen, "another account's token stays")
 
 	_, err = Authenticate(ctx, pool, username, password)
 	require.ErrorIs(t, err, ErrUnauthorized)

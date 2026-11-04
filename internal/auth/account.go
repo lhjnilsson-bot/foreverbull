@@ -106,8 +106,8 @@ func CreateEditor(ctx context.Context, db DB, username, password string) (string
 }
 
 // RotatePassword replaces password_hash for username. It does not change
-// role and it does not revoke API tokens. The caller has no browser session,
-// so every browser_session row for the account is deleted in the same
+// role. A new password means the old one may be known, so every API token of
+// the account is revoked and every browser_session row is deleted in the same
 // transaction as the hash update.
 func RotatePassword(ctx context.Context, db DB, username, password string) (string, error) {
 	if err := ctx.Err(); err != nil {
@@ -156,6 +156,11 @@ func RotatePassword(ctx context.Context, db DB, username, password string) (stri
 	}
 	if err != nil {
 		return "", fmt.Errorf("update password: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE api_token SET revoked_at = now()
+		WHERE account_id = $1 AND revoked_at IS NULL`, updated); err != nil {
+		return "", fmt.Errorf("revoke tokens: %w", err)
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM browser_session WHERE account_id = $1`, updated); err != nil {
 		return "", fmt.Errorf("revoke sessions: %w", err)

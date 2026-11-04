@@ -596,6 +596,29 @@ func TestSavedTokenStaysWithoutExpiryOrIdleTimeout(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestRoleDowngradeRevokesTokensAndSessions(t *testing.T) {
+	t.Setenv(environment.AuthEnabled, "true")
+	pool := newAuthDB(t)
+	ctx := context.Background()
+	require.NoError(t, Migrate(ctx, pool))
+	now := time.Now()
+	id, token := issueTestCLIToken(t, pool, "cli-downgrade", RoleEditor, now)
+	session, err := OpenSession(ctx, pool, id, now)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, `UPDATE account SET role = 'admin' WHERE id = $1`, id)
+	require.NoError(t, err)
+	_, err = AccountFromBearer(ctx, pool, token.Secret, now)
+	require.NoError(t, err, "an upgrade keeps the token")
+
+	_, err = pool.Exec(ctx, `UPDATE account SET role = 'viewer' WHERE id = $1`, id)
+	require.NoError(t, err)
+	_, err = AccountFromBearer(ctx, pool, token.Secret, now)
+	require.ErrorIs(t, err, ErrUnauthorized)
+	_, err = accountFromCookie(ctx, pool, session, now)
+	require.ErrorIs(t, err, ErrUnauthorized)
+}
+
 func TestLogoutAllRevokesEveryTokenAndSession(t *testing.T) {
 	sink := captureLogs(t)
 	server, h := newCLIServer(t, sink)
