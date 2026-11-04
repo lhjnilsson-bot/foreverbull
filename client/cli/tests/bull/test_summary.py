@@ -1,6 +1,7 @@
 from io import StringIO
 
 from foreverbull_cli.bull.summary import active_day_count
+from foreverbull_cli.bull.summary import dividend_lines
 from foreverbull_cli.bull.summary import format_active_days
 from foreverbull_cli.bull.summary import format_usd
 from foreverbull_cli.bull.summary import held_no_position
@@ -10,6 +11,11 @@ from foreverbull_cli.bull.summary import starting_portfolio_value
 from rich.console import Console
 
 from foreverbull.pb.foreverbull.backtest.v1 import execution_pb
+
+
+LEGACY = execution_pb.ReturnBasis.UNSPECIFIED
+TOTAL = execution_pb.ReturnBasis.TOTAL
+ADJUSTED_CLOSE = execution_pb.ReturnBasis.ADJUSTED_CLOSE
 
 
 def _render(renderable) -> str:
@@ -72,7 +78,7 @@ def test_metrics_table_prints_last_period_scalars_and_first_open():
         benchmark_period_return=0.031,
         longs_count=2,
     )
-    rendered = _render(metrics_table("SPY", [first, held_short, last]))
+    rendered = _render(metrics_table("SPY", [first, held_short, last], LEGACY))
     assert "$100,000.00" in rendered
     assert "$104,200.00" in rendered
     assert "$102,000.00" not in rendered
@@ -99,14 +105,14 @@ def test_metrics_table_prints_last_period_scalars_and_first_open():
 
 def test_stored_zero_ratio_prints_and_a_missing_ratio_stays_a_dash():
     zero = execution_pb.Period(starting_cash=1, portfolio_value=1, sharpe=0.0, sortino=0.0)
-    zero_rendered = _render(metrics_table("SPY", [zero]))
+    zero_rendered = _render(metrics_table("SPY", [zero], LEGACY))
     sharpe_line = next(line for line in zero_rendered.splitlines() if "Sharpe" in line)
     assert "0.00" in sharpe_line
 
     missing = execution_pb.Period(starting_cash=1, portfolio_value=1, algorithm_period_return=0.01)
     missing.clear_field("sharpe")
     missing.clear_field("sortino")
-    missing_rendered = _render(metrics_table("SPY", [missing]))
+    missing_rendered = _render(metrics_table("SPY", [missing], LEGACY))
     sharpe_line = next(line for line in missing_rendered.splitlines() if "Sharpe" in line)
     assert "-" in sharpe_line
     assert "0.00" not in sharpe_line
@@ -129,7 +135,7 @@ def test_tradeless_periods_keep_zero_return_and_leave_ratios_unset():
     periods = [day, day]
     assert held_no_position(periods)
     assert active_day_count(periods) == 0
-    rendered = _render(metrics_table("SPY", periods))
+    rendered = _render(metrics_table("SPY", periods, LEGACY))
     assert "$100,000.00" in rendered
     assert "+0.0%" in rendered
     assert "+24.8%" in rendered
@@ -193,3 +199,73 @@ def test_run_notice_lines_keep_the_held_sentence_per_line_and_fold_it():
     summary = "3 symbols were delisted before the run ended and were left out. Positions held were closed at their last price."
     assert run_notice_lines([held, plain, third], verbose=False) == [f"{summary} Run with --verbose for the list."]
     assert run_notice_lines([held, plain, third], verbose=True) == [summary, held, plain, third]
+
+
+def _ko_end() -> execution_pb.Period:
+    # The end of the KO worked example: V_T 6,771.00, TR 12.81%, PR 11.20%.
+    return execution_pb.Period(
+        starting_cash=6_002,
+        portfolio_value=6_771,
+        algorithm_period_return=0.128124,
+        price_return=0.111963,
+        benchmark_period_return=0.05,
+        benchmark_price_return=0.03,
+        longs_count=1,
+    )
+
+
+def _line(rendered: str, label: str) -> str:
+    return next(line for line in rendered.splitlines() if label in line)
+
+
+def test_a_total_return_run_shows_total_and_price_return_side_by_side():
+    rendered = _render(metrics_table("SPY", [_ko_end()], TOTAL))
+    total = _line(rendered, "Total return")
+    assert "+12.8%" in total
+    assert "Benchmark (SPY) total" in total
+    assert "+5.0%" in total
+    price = _line(rendered, "Price return")
+    assert "+11.2%" in price
+    assert "Benchmark (SPY) price" in price
+    assert "+3.0%" in price
+    assert rendered.index("Total return") < rendered.index("Price return") < rendered.index("Sharpe")
+
+
+def test_a_total_return_run_without_a_benchmark_says_so_on_both_rows():
+    rendered = _render(metrics_table("", [_ko_end()], TOTAL))
+    assert "not set" in _line(rendered, "Total return")
+    assert "not set" in _line(rendered, "Price return")
+
+
+def test_an_adjusted_close_run_has_one_labelled_return():
+    rendered = _render(metrics_table("SPY", [_ko_end()], ADJUSTED_CLOSE))
+    assert "+12.8%" in _line(rendered, "Adjusted-close return")
+    assert "Price return" not in rendered
+    assert "Total return" not in rendered
+
+
+def test_a_run_stored_before_dividends_keeps_the_plain_return():
+    rendered = _render(metrics_table("SPY", [_ko_end()], LEGACY))
+    assert "+12.8%" in _line(rendered, "Return")
+    assert "Total return" not in rendered
+    assert "Price return" not in rendered
+
+
+def test_dividend_lines_say_when_cash_lands_and_count_the_foreign_dividends():
+    execution = execution_pb.Execution(return_basis=TOTAL, foreign_dividends_gross=2)
+    assert dividend_lines(execution, [_ko_end()]) == [
+        "Dividends paid on the ex-date: the cash lands then, not on the pay date.",
+        "2 foreign dividends booked gross, before withholding.",
+    ]
+    execution.foreign_dividends_gross = 1
+    assert dividend_lines(execution, [_ko_end()]) == [
+        "Dividends paid on the ex-date: the cash lands then, not on the pay date.",
+        "1 foreign dividend booked gross, before withholding.",
+    ]
+
+
+def test_dividend_lines_label_an_adjusted_close_run_and_skip_a_legacy_one():
+    assert dividend_lines(execution_pb.Execution(return_basis=ADJUSTED_CLOSE), [_ko_end()]) == [
+        "Adjusted-close return (dividends inside prices): no dividends were booked as cash."
+    ]
+    assert dividend_lines(execution_pb.Execution(), [_ko_end()]) == []

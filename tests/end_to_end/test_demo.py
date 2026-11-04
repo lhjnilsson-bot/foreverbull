@@ -139,7 +139,7 @@ def assert_run_traded(output: str) -> None:
     execution` does, so a rounded summary cannot hide a zero.
     """
     assert NO_TRADES_NOTICE not in output, output
-    assert re.search(r"Benchmark \(SPY\)\s+[+-]\d+\.\d%", output) is not None, output
+    assert re.search(r"Benchmark \(SPY\) total\s+[+-]\d+\.\d%", output) is not None, output
     match = re.search(r"fbull backtest execution ([0-9a-f]+)", output)
     assert match is not None, output
     ids = [current.id for current in broker.backtest.list_executions("demo") if current.id.startswith(match.group(1))]
@@ -178,7 +178,8 @@ def test_start_stop(runner, simple_algorithm):
     result = runner(backtest_cli, f"run demo {crossover}")
     assert result.exit_code == 0, result.output
     assert "Backtest finished: demo · 2021-01-01 → 2021-03-31 · provider: yahoo" in result.output
-    assert "Return" in result.output
+    assert "Total return" in result.output
+    assert "Price return" in result.output
     assert_run_traded(result.output)
 
     match = re.search(r"fbull backtest execution ([0-9a-f]+)", result.output)
