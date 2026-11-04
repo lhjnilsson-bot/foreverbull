@@ -1,10 +1,14 @@
 from io import StringIO
 
+import pytest
+
 from foreverbull_cli.bull.summary import active_day_count
 from foreverbull_cli.bull.summary import format_active_days
 from foreverbull_cli.bull.summary import format_usd
 from foreverbull_cli.bull.summary import held_no_position
 from foreverbull_cli.bull.summary import metrics_table
+from foreverbull_cli.bull.summary import no_trades_line
+from foreverbull_cli.bull.summary import print_run_summary
 from foreverbull_cli.bull.summary import run_notice_lines
 from foreverbull_cli.bull.summary import starting_portfolio_value
 from rich.console import Console
@@ -142,6 +146,40 @@ def test_tradeless_periods_keep_zero_return_and_leave_ratios_unset():
     sharpe_line = next(line for line in rendered.splitlines() if "Sharpe" in line)
     assert "-" in sharpe_line
     assert "0.00" not in sharpe_line
+
+
+def test_no_trades_line_is_singular_for_one_day_and_plural_otherwise():
+    assert no_trades_line(1) == "No trades: the strategy held no position on its 1 trading day."
+    assert no_trades_line(2) == "No trades: the strategy held no position on any of the 2 trading days."
+    assert no_trades_line(250) == "No trades: the strategy held no position on any of the 250 trading days."
+
+
+@pytest.mark.parametrize(
+    ("day_count", "expected"),
+    [
+        (1, "  No trades: the strategy held no position on its 1 trading day."),
+        (2, "  No trades: the strategy held no position on any of the 2 trading days."),
+    ],
+)
+def test_run_summary_prints_the_no_trades_line_for_the_day_count(monkeypatch, day_count, expected):
+    buf = StringIO()
+    monkeypatch.setattr(
+        "foreverbull_cli.bull.summary.console",
+        Console(file=buf, width=200, force_terminal=False, color_system=None),
+    )
+    day = execution_pb.Period(starting_cash=100_000, portfolio_value=100_000, longs_count=0, shorts_count=0)
+    print_run_summary(
+        backtest_name="flat",
+        benchmark="",
+        provider="yahoo",
+        start_iso="2024-01-02",
+        end_iso="2024-01-03",
+        execution_id="01234567-89ab-cdef-0123-456789abcdef",
+        periods=[day] * day_count,
+    )
+    lines = buf.getvalue().splitlines()
+    assert expected in lines
+    assert "  Return and drawdown stay at 0 and Sharpe and Sortino are not defined." in lines
 
 
 def test_run_notice_lines_keeps_one_or_two_dates_as_lines():
