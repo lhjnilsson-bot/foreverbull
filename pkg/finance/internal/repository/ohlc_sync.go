@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/lhjnilsson/foreverbull/pkg/finance/supplier"
 	financepb "github.com/lhjnilsson/foreverbull/pkg/pb/finance"
 )
 
@@ -128,6 +129,50 @@ const rescaleTolerance = 0.005
 func (db *OHLC) Sync(ctx context.Context, provider, symbol string, start time.Time, end *time.Time,
 	fetch FetchBars,
 ) error {
+	return db.sync(ctx, provider, symbol, start, end, fetch, nil)
+}
+
+// FetchDividends returns the provider's cash dividends with an ex-date from
+// the day of start through the day of end (nil end: through today).
+type FetchDividends func(start time.Time, end *time.Time) ([]supplier.Dividend, error)
+
+// ErrStooqCashDividends refuses cash dividends on stooq, whose bars already
+// include them: booking the cash too would count each dividend twice. No
+// user flow reaches it, because SyncSource stores stooq through Sync, so it
+// means foreverbull itself went wrong.
+var ErrStooqCashDividends = errors.New( //nolint:staticcheck // ST1005: agreed user-facing copy ends with a period
+	"foreverbull was asked to store cash dividends for stooq, whose prices already include them, " +
+		"so they'd be counted twice. Nothing was stored. " +
+		"Please report it at https://github.com/lhjnilsson/foreverbull/issues with this message.")
+
+// SyncWithDividends is Sync for a provider whose bars are split-adjusted but
+// not dividend-adjusted (yahoo, alpaca). In the same locked transaction, after
+// the bars, it replaces the dividends of the symbol's whole stored span and
+// records that span as fetched. A refetch that re-scaled the bars therefore
+// re-scales the dividends too: the two never sit on different split bases.
+//
+// Dividends are fetched before the lock, from the earlier of start and the
+// first stored day through today. When the stored span under the lock starts
+// earlier still (another sync stored older bars in between), they are fetched
+// again while the lock is held. A failed fetch comes back as the fetch
+// returned it, and a refused dividend as a DividendError; either way nothing
+// is stored. On stooq it is ErrStooqCashDividends, and nothing is fetched or
+// stored.
+func (db *OHLC) SyncWithDividends(ctx context.Context, provider, symbol string, start time.Time, end *time.Time,
+	fetch FetchBars, fetchDividends FetchDividends,
+) error {
+	if priceProvider(provider) == "stooq" {
+		return ErrStooqCashDividends
+	}
+	if fetchDividends == nil {
+		return &StoreError{Symbol: symbol, Err: errors.New("no dividend fetch")}
+	}
+	return db.sync(ctx, provider, symbol, start, end, fetch, fetchDividends)
+}
+
+func (db *OHLC) sync(ctx context.Context, provider, symbol string, start time.Time, end *time.Time,
+	fetch FetchBars, fetchDividends FetchDividends,
+) error {
 	begin, ok := db.Conn.(txBeginner)
 	if !ok {
 		return &StoreError{Symbol: symbol, Err: ErrNoTransaction}
@@ -135,6 +180,14 @@ func (db *OHLC) Sync(ctx context.Context, provider, symbol string, start time.Ti
 	fetched := &fetchCache{fetch: fetch}
 	if err := db.classify(symbol, db.decide(ctx, provider, symbol, start, end, fetched.get, false)); err != nil {
 		return err
+	}
+	var dividends *dividendCache
+	if fetchDividends != nil {
+		var err error
+		dividends, err = db.prefetchDividends(ctx, provider, symbol, start, fetchDividends)
+		if err != nil {
+			return err
+		}
 	}
 	if pool, ok := db.Conn.(*pgxpool.Pool); ok {
 		release, err := acquireSyncSlot(ctx, pool)
@@ -169,6 +222,11 @@ func (db *OHLC) Sync(ctx context.Context, provider, symbol string, start time.Ti
 	inTx := &OHLC{Conn: tx}
 	if err := inTx.classify(symbol, inTx.decide(ctx, provider, symbol, start, end, fetched.get, true)); err != nil {
 		return err
+	}
+	if dividends != nil {
+		if err := inTx.replaceDividends(ctx, provider, symbol, dividends); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return &StoreError{Symbol: symbol, Err: err}
@@ -525,4 +583,70 @@ func (db *OHLC) overlapMatches(ctx context.Context, provider, symbol string, day
 		return math.Abs(o.GetClose()-storedClose)/storedClose <= rescaleTolerance, nil
 	}
 	return false, nil
+}
+
+// dividendCache holds the dividends fetched before the lock: every ex-date
+// from the day of from through today.
+type dividendCache struct {
+	fetch     FetchDividends
+	from      time.Time
+	dividends []supplier.Dividend
+	fetchedAt time.Time
+}
+
+// prefetchDividends fetches, outside any transaction, the dividends of the
+// span the stored bars will cover: from the earlier of start and the first
+// stored day through today.
+func (db *OHLC) prefetchDividends(ctx context.Context, provider, symbol string, start time.Time,
+	fetch FetchDividends,
+) (*dividendCache, error) {
+	from := start
+	first, _, stored, err := db.Range(ctx, provider, symbol)
+	if err != nil {
+		return nil, &StoreError{Symbol: symbol, Err: err}
+	}
+	if stored && first.Before(from) {
+		from = first
+	}
+	cache := &dividendCache{fetch: fetch, from: from}
+	if err := cache.load(from); err != nil {
+		return nil, err
+	}
+	return cache, nil
+}
+
+func (c *dividendCache) load(from time.Time) error {
+	fetchedAt := time.Now().UTC()
+	dividends, err := c.fetch(from, nil)
+	if err != nil {
+		return err
+	}
+	c.from, c.dividends, c.fetchedAt = from, dividends, fetchedAt
+	return nil
+}
+
+// replaceDividends stores the dividends of the span the bars cover now, in
+// the Sync transaction. A span that starts before the prefetched one is
+// fetched again here, under the lock. No stored bars means nothing to attach
+// dividends to; the caller already failed or stored no bars on purpose.
+func (db *OHLC) replaceDividends(ctx context.Context, provider, symbol string, cache *dividendCache) error {
+	first, last, stored, err := db.Range(ctx, provider, symbol)
+	if err != nil {
+		return &StoreError{Symbol: symbol, Err: err}
+	}
+	if !stored {
+		return nil
+	}
+	if tradingDay(first) < tradingDay(cache.from) {
+		if err := cache.load(first); err != nil {
+			return err
+		}
+	}
+	dividends := Dividends{Conn: db.Conn}
+	err = dividends.Replace(ctx, provider, symbol, first, last, cache.dividends, cache.fetchedAt)
+	var invalid *DividendError
+	if err != nil && !errors.As(err, &invalid) {
+		return &StoreError{Symbol: symbol, Err: err}
+	}
+	return err
 }
