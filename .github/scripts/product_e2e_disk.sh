@@ -1,47 +1,19 @@
 #!/usr/bin/env bash
-# Free disk on the product-e2e runner before Kind loads images.
+# Disk notes for the product-e2e job.
 #
-# `kind load docker-image` runs `docker save` of the three :local tags and
-# writes that tarball under /tmp. The artifact tarballs are still on the same
-# disk, and the hosted runner also ships toolchains this job never runs.
-# `free` removes those toolchains and Docker images this job does not load.
-# `drop-tarballs` deletes the artifact tarballs only after the three :local
-# tags inspect. Kind's node, its volumes, and the chart images are not removed.
+# Kind loads the three :local tags by saving them on the host and importing
+# that stream inside the Kind node. The downloaded artifact tarballs are a
+# second copy of those images. drop-tarballs deletes only those files, and
+# only after every :local tag inspects. It does not remove runner packages,
+# images, or Kind data.
 #
-# A missing toolchain directory is logged and skipped: runner images do not
-# all ship the same trees. A failed removal, a missing required image, or a
-# missing artifact tarball exits non-zero. There is no fallback that continues
-# into Kind after that.
+# host prints capacity and inodes for the runner filesystem. kind-node prints
+# capacity and inodes from df inside the control-plane container. A missing
+# node or a failed df exits non-zero and does not substitute the other
+# measurement.
 #
-# DISK_ROOT, when set, prefixes toolchain and tarball paths so tests can run
-# without touching the machine. DOCKER, when set, is the docker executable.
-
-# Lists below are the contract. test_product_e2e_disk.sh compares them with
-# the workflow and the chart.
-
-toolchain_paths() {
-  printf '%s\n' \
-    /usr/local/lib/android \
-    /usr/share/dotnet \
-    /opt/ghc \
-    /usr/local/.ghcup \
-    /usr/share/swift \
-    /opt/hostedtoolcache/CodeQL
-}
-
-# Repositories kind load or the chart still need. Any tag of these stays.
-# A container's image stays even when its repository is not in this list,
-# so a running buildkit or a Kind node is not removed by image id.
-preserved_repositories() {
-  printf '%s\n' \
-    ghcr.io/lhjnilsson/foreverbull \
-    ghcr.io/lhjnilsson/zipline \
-    ghcr.io/lhjnilsson/fb-grafana \
-    kindest/node \
-    postgres \
-    nats \
-    pgsty/silo
-}
+# DISK_ROOT prefixes tarball paths in tests. DF and DOCKER select those
+# executables. KIND_NODE is the control-plane container name.
 
 local_image_refs() {
   printf '%s\n' \
@@ -55,6 +27,12 @@ artifact_tarballs() {
     foreverbull.tar \
     zipline.tar \
     fb_grafana.tar
+}
+
+kind_node_paths() {
+  printf '%s\n' \
+    / \
+    /var/lib/containerd
 }
 
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
@@ -91,31 +69,22 @@ disk_path() {
   fi
 }
 
-df_target() {
-  local root
-  root="$(disk_root)"
-  if [[ -n "${root}" ]]; then
-    printf '%s\n' "${root}"
-  else
-    printf '%s\n' /
-  fi
-}
-
-using_sudo() {
-  [[ -z "$(disk_root)" && "$(id -u)" -ne 0 ]]
+df_bin() {
+  printf '%s\n' "${DF:-df}"
 }
 
 docker_bin() {
   printf '%s\n' "${DOCKER:-docker}"
 }
 
+kind_node_name() {
+  printf '%s\n' "${KIND_NODE:-foreverbull-control-plane}"
+}
+
 require_docker() {
   local bin
   bin="$(docker_bin)"
-  if [[ -x "${bin}" ]]; then
-    return 0
-  fi
-  if command -v "${bin}" >/dev/null 2>&1; then
+  if [[ -x "${bin}" ]] || command -v "${bin}" >/dev/null 2>&1; then
     return 0
   fi
   echo "docker is not available: ${bin}" >&2
@@ -123,179 +92,104 @@ require_docker() {
 }
 
 run_docker() {
-  local bin
-  bin="$(docker_bin)"
-  "${bin}" "$@"
+  "$(docker_bin)" "$@"
 }
 
-normalize_id() {
-  local id="$1"
-  id="${id//$'\r'/}"
-  id="${id#sha256:}"
-  printf '%s\n' "${id}"
-}
-
-log_disk() {
-  local label="$1"
-  local path avail
-  path="$(df_target)"
-  avail="$(df -B1 -P "${path}" | awk 'NR==2 {print $4}')"
-  if [[ -z "${avail}" ]]; then
-    echo "disk ${label}: df did not report available bytes for ${path}" >&2
+# Print one df table and return the free-count field. scope and path name
+# the filesystem the command actually queried.
+df_free() {
+  local scope="$1"
+  local path="$2"
+  shift 2
+  local bin table free
+  bin="$(df_bin)"
+  if ! table="$("${bin}" "$@" "${path}")"; then
+    echo "${scope} disk: df failed for ${path}" >&2
     exit 1
   fi
-  echo "disk ${label} avail_bytes=${avail} path=${path}"
-  df -hP "${path}"
-}
-
-refuse_toolchain_path() {
-  local rel="$1"
-  case "${rel}" in
-    /*) ;;
-    *)
-      echo "refusing toolchain path: ${rel}" >&2
-      exit 1
-      ;;
-  esac
-  case "${rel}" in
-    *..*)
-      echo "refusing toolchain path: ${rel}" >&2
-      exit 1
-      ;;
-  esac
-  case "${rel}" in
-    /|/usr|/usr/bin|/usr/local|/usr/local/bin|/usr/share|/opt|/opt/hostedtoolcache|/var|/var/lib|/var/lib/docker|/var/lib/containerd|/tmp|/tmp/images|/home)
-      echo "refusing toolchain path: ${rel}" >&2
-      exit 1
-      ;;
-  esac
-}
-
-remove_toolchain() {
-  local rel="$1"
-  local path
-  refuse_toolchain_path "${rel}"
-  path="$(disk_path "${rel}")"
-  if [[ ! -e "${path}" && ! -L "${path}" ]]; then
-    echo "absent toolchain ${rel}"
-    return 0
-  fi
-  echo "removing toolchain ${rel}"
-  # Same privilege as the removal. A root-owned tree can fail du for the
-  # runner user; that must not skip the delete or hide the error.
-  if using_sudo; then
-    sudo du -sh -- "${path}" || exit 1
-    sudo rm -rf -- "${path}" || exit 1
-  else
-    du -sh -- "${path}" || exit 1
-    rm -rf -- "${path}" || exit 1
-  fi
-  if [[ -e "${path}" || -L "${path}" ]]; then
-    echo "toolchain still present: ${rel}" >&2
+  printf '%s\n' "${table}"
+  free="$(awk 'NR==2 { print $4 }' <<<"${table}")"
+  if [[ ! "${free}" =~ ^[0-9]+$ ]]; then
+    echo "${scope} disk: df did not report a free count for ${path}" >&2
     exit 1
   fi
+  printf '%s\n' "${free}"
 }
 
-repo_preserved() {
-  local repo="$1"
-  local item
-  while IFS= read -r item; do
-    if [[ "${item}" == "${repo}" ]]; then
-      return 0
-    fi
-  done < <(preserved_repositories)
-  return 1
+# df_free prints the table and then the count. Split them.
+read_free() {
+  local output="$1"
+  printf '%s\n' "${output}" | head -n -1
+  FREE_COUNT="$(printf '%s\n' "${output}" | tail -n 1)"
 }
 
-remove_unused_images() {
-  local ps_file images_file
-  local cid image_id repo tag key ref
-  declare -A keep_ids=()
-  local -a keep_keys=()
-  local -a remove_refs=()
+measure() {
+  local scope="$1"
+  local path="$2"
+  local bytes_out inode_out
+  local avail_bytes avail_inodes
+  echo "${scope} disk table path=${path}"
+  bytes_out="$(df_free "${scope}" "${path}" -B1 -P)"
+  read_free "${bytes_out}"
+  avail_bytes="${FREE_COUNT}"
+  inode_out="$(df_free "${scope}" "${path}" -iP)"
+  read_free "${inode_out}"
+  avail_inodes="${FREE_COUNT}"
+  df_bin_h="$(df_bin)"
+  "${df_bin_h}" -hP "${path}" || exit 1
+  echo "${scope} disk avail_bytes=${avail_bytes} avail_inodes=${avail_inodes} path=${path}"
+}
 
+measure_node() {
+  local node="$1"
+  local path="$2"
+  local bytes_out inode_out human
+  local avail_bytes avail_inodes
+  echo "kind-node disk table node=${node} path=${path}"
+  if ! bytes_out="$(run_docker exec "${node}" df -B1 -P "${path}")"; then
+    echo "kind-node disk: df failed node=${node} path=${path}" >&2
+    exit 1
+  fi
+  printf '%s\n' "${bytes_out}"
+  avail_bytes="$(awk 'NR==2 { print $4 }' <<<"${bytes_out}")"
+  if [[ ! "${avail_bytes}" =~ ^[0-9]+$ ]]; then
+    echo "kind-node disk: df did not report available bytes node=${node} path=${path}" >&2
+    exit 1
+  fi
+  if ! inode_out="$(run_docker exec "${node}" df -iP "${path}")"; then
+    echo "kind-node disk: inode df failed node=${node} path=${path}" >&2
+    exit 1
+  fi
+  printf '%s\n' "${inode_out}"
+  avail_inodes="$(awk 'NR==2 { print $4 }' <<<"${inode_out}")"
+  if [[ ! "${avail_inodes}" =~ ^[0-9]+$ ]]; then
+    echo "kind-node disk: df did not report free inodes node=${node} path=${path}" >&2
+    exit 1
+  fi
+  if ! human="$(run_docker exec "${node}" df -hP "${path}")"; then
+    echo "kind-node disk: human df failed node=${node} path=${path}" >&2
+    exit 1
+  fi
+  printf '%s\n' "${human}"
+  echo "kind-node disk avail_bytes=${avail_bytes} avail_inodes=${avail_inodes} node=${node} path=${path}"
+}
+
+cmd_host() {
+  measure host /
+}
+
+cmd_kind_node() {
+  local node path
+  node="$(kind_node_name)"
   require_docker
-  echo "docker before"
-  run_docker system df
-
-  ps_file="$(mktemp)"
-  images_file="$(mktemp)"
-  run_docker ps -aq --no-trunc >"${ps_file}"
-  while IFS= read -r cid || [[ -n "${cid}" ]]; do
-    cid="${cid//$'\r'/}"
-    [[ -z "${cid}" ]] && continue
-    image_id="$(run_docker inspect --format '{{.Image}}' "${cid}")"
-    key="$(normalize_id "${image_id}")"
-    keep_ids["${key}"]=1
-  done <"${ps_file}"
-
-  run_docker image ls --no-trunc --format $'{{.ID}}\t{{.Repository}}\t{{.Tag}}' >"${images_file}"
-  while IFS= read -r line || [[ -n "${line}" ]]; do
-    line="${line//$'\r'/}"
-    [[ -z "${line}" ]] && continue
-    IFS=$'\t' read -r image_id repo tag <<<"${line}"
-    if [[ -z "${image_id}" || -z "${repo}" || -z "${tag}" ]]; then
-      echo "unexpected docker image list line: ${line}" >&2
-      exit 1
-    fi
-    key="$(normalize_id "${image_id}")"
-    if repo_preserved "${repo}" || [[ -n "${keep_ids[${key}]:-}" ]]; then
-      keep_ids["${key}"]=1
-    fi
-  done <"${images_file}"
-
-  while IFS= read -r line || [[ -n "${line}" ]]; do
-    line="${line//$'\r'/}"
-    [[ -z "${line}" ]] && continue
-    IFS=$'\t' read -r image_id repo tag <<<"${line}"
-    key="$(normalize_id "${image_id}")"
-    if [[ -n "${keep_ids[${key}]:-}" ]]; then
-      if [[ "${repo}" != "<none>" && "${tag}" != "<none>" ]]; then
-        echo "kept image ${repo}:${tag}"
-      else
-        echo "kept image id sha256:${key}"
-      fi
-      continue
-    fi
-    if [[ "${repo}" == "<none>" || "${tag}" == "<none>" ]]; then
-      continue
-    fi
-    remove_refs+=("${repo}:${tag}")
-  done <"${images_file}"
-
-  for key in "${!keep_ids[@]}"; do
-    keep_keys+=("${key}")
-  done
-
-  if ((${#remove_refs[@]} > 0)); then
-    for ref in "${remove_refs[@]}"; do
-      echo "removing image ${ref}"
-      run_docker rmi "${ref}" || exit 1
-    done
+  if ! run_docker inspect "${node}" >/dev/null; then
+    echo "kind-node disk unavailable: ${node} is not a local container" >&2
+    exit 1
   fi
-
-  # Dangling images only. --all would delete tagged images Kind has not
-  # started yet, including the three :local tags.
-  run_docker image prune --force || exit 1
-
-  for key in "${keep_keys[@]}"; do
-    run_docker image inspect "sha256:${key}" >/dev/null || exit 1
-  done
-
-  echo "docker after"
-  run_docker system df
-  rm -f -- "${ps_file}" "${images_file}"
-}
-
-cmd_free() {
-  local rel
-  log_disk before
-  while IFS= read -r rel; do
-    [[ -z "${rel}" ]] && continue
-    remove_toolchain "${rel}"
-  done < <(toolchain_paths)
-  remove_unused_images
-  log_disk after
+  while IFS= read -r path; do
+    [[ -z "${path}" ]] && continue
+    measure_node "${node}" "${path}"
+  done < <(kind_node_paths)
 }
 
 require_local_images() {
@@ -314,7 +208,7 @@ require_local_images() {
 cmd_drop_tarballs() {
   local name path
   local -a paths=()
-  log_disk before
+  cmd_host
   require_local_images
   while IFS= read -r name; do
     [[ -z "${name}" ]] && continue
@@ -334,16 +228,17 @@ cmd_drop_tarballs() {
     fi
   done
   require_local_images
-  log_disk after
+  cmd_host
 }
 
 usage() {
-  echo "usage: product_e2e_disk.sh free|drop-tarballs" >&2
+  echo "usage: product_e2e_disk.sh host|kind-node|drop-tarballs" >&2
   exit 2
 }
 
 case "${1:-}" in
-  free) cmd_free ;;
+  host) cmd_host ;;
+  kind-node) cmd_kind_node ;;
   drop-tarballs) cmd_drop_tarballs ;;
   *) usage ;;
 esac
