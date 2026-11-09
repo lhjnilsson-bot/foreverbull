@@ -185,6 +185,15 @@ def run_preflight(cm: ClusterManager):
         raise typer.Exit(1) from exc
 
 
+def check_web_address(cm: ClusterManager):
+    """Refuse a web origin fbenv cannot pass to Grafana, before any change."""
+    try:
+        cm.config._helm_web_url()
+    except ValueError as exc:
+        console.print(str(exc), markup=False, highlight=False, soft_wrap=True)
+        raise typer.Exit(1) from exc
+
+
 def check_version(cm: ClusterManager):
     """Stop on a VERSION fbenv won't run, before host checks or any change."""
     try:
@@ -293,6 +302,7 @@ def create(
         broker_address=broker_address,
     )
     check_version(cm)
+    check_web_address(cm)
     run_preflight(cm)
 
     changing = False
@@ -430,6 +440,7 @@ def update(
         broker_address=broker_address,
     )
     check_version(cm)
+    check_web_address(cm)
 
     rollout_notice: RolloutNotice | None = None
     try:

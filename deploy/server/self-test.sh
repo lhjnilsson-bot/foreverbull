@@ -122,13 +122,64 @@ values="$(mktemp)"
 )
 grep -Fq "tag: sha256:${A}" "${values}" || bad "broker pin"
 grep -Fq "url: https://nightly.foreverbull.com" "${values}" || bad "grafana url"
+grep -Fq 'webUrl: ""' "${values}" || bad "web url empty"
 grep -Fq "imageTag: pinned" "${values}" || bad "fallback tag"
+if grep -q 'localhost' "${values}"; then
+  bad "pin values include localhost"
+fi
 if grep -Eq 'latest|allowDefaults: true|hostPort: true' "${values}"; then
   bad "pin values include a moving tag or local defaults"
 else
   ok "pin values"
 fi
 rm -f "${values}"
+assert_ok "public web origin" bash -c "
+  set -euo pipefail
+  source '${ROOT}/deploy/server/lib.sh'
+  export IMAGE_REPOSITORY=ghcr.io/example
+  export FOREVERBULL_DIGEST='sha256:${A}'
+  export ZIPLINE_DIGEST='sha256:${B}'
+  export GRAFANA_DIGEST='sha256:${C}'
+  export FOREVERBULL_WEB_URL=https://app.example.com
+  values=\$(mktemp)
+  write_pin_values \"\${values}\"
+  grep -Fq 'webUrl: https://app.example.com' \"\${values}\"
+"
+assert_fail "web localhost" bash -c "
+  set -euo pipefail
+  source '${ROOT}/deploy/server/lib.sh'
+  export IMAGE_REPOSITORY=ghcr.io/example
+  export FOREVERBULL_DIGEST='sha256:${A}'
+  export ZIPLINE_DIGEST='sha256:${B}'
+  export GRAFANA_DIGEST='sha256:${C}'
+  export FOREVERBULL_WEB_URL=http://localhost:8080
+  write_pin_values /tmp/foreverbull-pin-rejected
+"
+web_err="$(
+  bash -c "
+    set -euo pipefail
+    source '${ROOT}/deploy/server/lib.sh'
+    export IMAGE_REPOSITORY=ghcr.io/example
+    export FOREVERBULL_DIGEST='sha256:${A}'
+    export ZIPLINE_DIGEST='sha256:${B}'
+    export GRAFANA_DIGEST='sha256:${C}'
+    export FOREVERBULL_WEB_URL=http://localhost:8080
+    write_pin_values /tmp/foreverbull-pin-rejected
+  " 2>&1 >/dev/null || true
+)"
+web_want="FOREVERBULL_WEB_URL isn't a public https address foreverbull can link to from Grafana. Set it to the foreverbull page's https address, not localhost, or leave it empty to hide the links. Nothing was changed."
+[[ "${web_err}" == "${web_want}" ]] || bad "web url message: ${web_err}"
+ok "web url message"
+assert_fail "web dollar" bash -c "
+  set -euo pipefail
+  source '${ROOT}/deploy/server/lib.sh'
+  export IMAGE_REPOSITORY=ghcr.io/example
+  export FOREVERBULL_DIGEST='sha256:${A}'
+  export ZIPLINE_DIGEST='sha256:${B}'
+  export GRAFANA_DIGEST='sha256:${C}'
+  export FOREVERBULL_WEB_URL='https://app.example.com/\$path'
+  write_pin_values /tmp/foreverbull-pin-rejected
+"
 assert_fail "pin rejects bad repo" bash -c "
   set -euo pipefail
   source '${ROOT}/deploy/server/lib.sh'

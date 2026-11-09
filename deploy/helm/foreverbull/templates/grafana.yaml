@@ -54,6 +54,8 @@ spec:
           env:
             - name: BROKER_URL
               value: {{ .Values.grafana.brokerUrl | quote }}
+            - name: FOREVERBULL_WEB_URL
+              value: {{ .Values.grafana.webUrl | quote }}
           startupProbe:
             httpGet:
               path: /api/health

@@ -114,6 +114,16 @@ if ! grep -q 'name: GRAFANA_URL' "${rendered}"; then
   exit 1
 fi
 
+if ! grep -q 'name: FOREVERBULL_WEB_URL' "${rendered}"; then
+  echo "grafana must set FOREVERBULL_WEB_URL" >&2
+  exit 1
+fi
+
+if ! grep -A1 'name: FOREVERBULL_WEB_URL' "${rendered}" | grep -q 'value: ""'; then
+  echo "FOREVERBULL_WEB_URL must default to empty" >&2
+  exit 1
+fi
+
 broker_manifest="$(mktemp)"
 trap 'rm -f "${rendered}" "${prefixed}" "${broker_manifest}"' EXIT
 awk '

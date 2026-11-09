@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+from urllib.parse import urlunsplit
 
 import yaml
 
@@ -539,6 +541,53 @@ def find_repo_root(start: Path | None = None) -> Path:
     raise FileNotFoundError("Could not find Foreverbull repository root (expected deploy/helm/foreverbull).")
 
 
+def _clean_url_path(path: str) -> str:
+    parts: list[str] = []
+    for part in path.split("/"):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    if not parts:
+        return ""
+    return "/" + "/".join(parts)
+
+
+def _require_web_origin(raw: str, name: str) -> str:
+    origin = public_http_origin(raw)
+    if origin:
+        return origin
+    raise ValueError(
+        f"{name} isn't a web address. Set it to the address foreverbull answers on, "
+        "such as http://localhost:8080, then run the command again. Nothing was changed."
+    )
+
+
+def public_http_origin(raw: str) -> str:
+    """scheme, host, and path. Userinfo, query, and fragment are dropped.
+
+    An empty string means the value is not an http(s) origin.
+    """
+    trimmed = raw.strip()
+    if not trimmed or any(char in trimmed for char in " \t\r\n$"):
+        return ""
+    parts = urlsplit(trimmed)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        return ""
+    host = parts.hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    netloc = host
+    if parts.port is not None:
+        default_port = (parts.scheme == "http" and parts.port == 80) or (parts.scheme == "https" and parts.port == 443)
+        if not default_port:
+            netloc = f"{host}:{parts.port}"
+    return urlunsplit((parts.scheme, netloc, _clean_url_path(parts.path), "", ""))
+
+
 class Config:
     def __init__(
         self,
@@ -747,6 +796,36 @@ class Config:
     @property
     def grafana_image(self) -> str:
         return self._app_image("fb-grafana")
+
+    def grafana_web_url(self) -> str:
+        """Public foreverbull origin for Grafana's Open in foreverbull links.
+
+        FOREVERBULL_BROKER_URL wins. Local Kind uses http://localhost:8080.
+        A remote cluster uses remote.broker_url. Empty when a remote cluster
+        has no broker_url, so the links stay hidden. A value that is set but
+        not an http(s) address, including one with $, is refused before any
+        change. Userinfo, query, and fragment are dropped.
+        """
+        env_url = str(self._environ.get("FOREVERBULL_BROKER_URL") or "").strip()
+        if env_url:
+            return _require_web_origin(env_url, "FOREVERBULL_BROKER_URL")
+        if self.is_local:
+            return public_http_origin("http://localhost:8080")
+        remote = str((self._data.get("remote") or {}).get("broker_url") or "").strip()
+        if not remote:
+            return ""
+        return _require_web_origin(remote, "remote.broker_url")
+
+    def _helm_web_url(self) -> str:
+        # Helm --set-string splits on commas. A comma is not a legal origin here.
+        web = self.grafana_web_url()
+        if "," in web:
+            raise ValueError(
+                f"The foreverbull address {web} has a comma in it, which fbenv can't pass to Grafana. "
+                "Remove the comma from FOREVERBULL_BROKER_URL or remote.broker_url, then run the command again. "
+                "Nothing was changed."
+            )
+        return web
 
     @property
     def app_images(self) -> tuple[str, str, str]:
@@ -991,6 +1070,8 @@ class ClusterManager:
 
     def create(self) -> None:
         """Install the cluster and chart with workloads stopped."""
+        # Refuse a bad web origin before Kind or Helm changes anything.
+        self.config._helm_web_url()
         self.require_tools(*self._tools_for_create())
         if self.config.is_local:
             self.ensure_kind_cluster()
@@ -1017,6 +1098,7 @@ class ClusterManager:
         self._status_cache = None
 
     def update(self) -> RolloutNotice | None:
+        self.config._helm_web_url()
         self.require_tools(*self._tools_for_create())
         if self.config.is_local:
             self.load_images()
@@ -1158,6 +1240,8 @@ class ClusterManager:
             f"global.appImagePullPolicy={'Always' if self.config.version == PUBLISHED_VERSION else 'IfNotPresent'}",
             "--set",
             f"expose.hostPort={'true' if self.config.is_local else 'false'}",
+            "--set-string",
+            f"grafana.webUrl={self.config._helm_web_url()}",
         ]
         if self.config.is_local:
             # Local Kind keeps the documented default credentials, but

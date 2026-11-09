@@ -69,6 +69,34 @@ require_grafana_url() {
   [[ "${1:-}" =~ ^https://[A-Za-z0-9.-]+$ ]]
 }
 
+# A public foreverbull page. localhost and a dollar sign are refused:
+# Grafana would interpolate $, and a loopback address is not a public origin.
+# write_pin_values calls this before it writes the values file. install.sh
+# calls write_pin_values before helm or kubectl change the cluster.
+require_public_web_url() {
+  local url="${1:-}"
+  local host
+  if [[ "$url" == *'$'* || "$url" == *'@'* ]]; then
+    refuse_public_web_url
+    return 1
+  fi
+  if [[ ! "$url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~:/?#&=+-]*)?$ ]]; then
+    refuse_public_web_url
+    return 1
+  fi
+  host="${url#https://}"
+  host="${host%%/*}"
+  host="${host%%:*}"
+  if [[ "$host" == "localhost" || "$host" == "127.0.0.1" ]]; then
+    refuse_public_web_url
+    return 1
+  fi
+}
+
+refuse_public_web_url() {
+  echo "FOREVERBULL_WEB_URL isn't a public https address foreverbull can link to from Grafana. Set it to the foreverbull page's https address, not localhost, or leave it empty to hide the links. Nothing was changed." >&2
+}
+
 kubeconfig_text_ok() {
   [[ "${1:-}" == *"apiVersion:"* && "${1:-}" == *"clusters:"* ]]
 }
@@ -128,6 +156,7 @@ image_suffix_for_deploy() {
 write_pin_values() {
   local path="$1"
   local grafana=""
+  local web_url=""
   require_ghcr_repo "${IMAGE_REPOSITORY:-}" || return 1
   require_digest "${FOREVERBULL_DIGEST:-}" || return 1
   require_digest "${ZIPLINE_DIGEST:-}" || return 1
@@ -135,6 +164,10 @@ write_pin_values() {
   if [[ -n "${GRAFANA_URL:-}" ]]; then
     require_grafana_url "${GRAFANA_URL}" || return 1
     grafana="${GRAFANA_URL}"
+  fi
+  if [[ -n "${FOREVERBULL_WEB_URL:-}" ]]; then
+    require_public_web_url "${FOREVERBULL_WEB_URL}" || return 1
+    web_url="${FOREVERBULL_WEB_URL}"
   fi
   {
     echo "global:"
@@ -154,9 +187,14 @@ write_pin_values() {
     echo "broker:"
     echo "  trading:"
     echo "    enabled: false"
+    echo "grafana:"
     if [[ -n "$grafana" ]]; then
-      echo "grafana:"
       echo "  url: ${grafana}"
+    fi
+    if [[ -n "$web_url" ]]; then
+      echo "  webUrl: ${web_url}"
+    else
+      echo '  webUrl: ""'
     fi
   } >"$path"
 }

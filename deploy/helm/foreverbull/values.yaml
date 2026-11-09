@@ -109,6 +109,10 @@ grafana:
   port: 3000
   brokerUrl: foreverbull:50055
   url: http://localhost:3000  # GRAFANA_URL on the broker; Kind host port
+  # FOREVERBULL_WEB_URL on Grafana. Public foreverbull origin for "Open in foreverbull".
+  # Empty hides the links. An unusable value stops Grafana from starting.
+  # Do not put credentials or a dollar sign here. fbenv sets http://localhost:8080 for Kind.
+  webUrl: ""
 
 serviceAccount:
   create: true

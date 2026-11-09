@@ -193,6 +193,20 @@ def test_status_leads_broker_error_with_advice(runner, mocked_container_manager:
     assert advice < detail
 
 
+def test_create_refuses_a_bad_web_address_before_any_change(runner, mocked_container_manager: MagicMock):
+    message = (
+        "FOREVERBULL_BROKER_URL isn't a web address. Set it to the address foreverbull answers on, "
+        "such as http://localhost:8080, then run the command again. Nothing was changed."
+    )
+    mocked_container_manager.config._helm_web_url.side_effect = ValueError(message)
+    result = runner(cli.cli, "create")
+    assert result.exit_code == 1
+    assert result.stdout.strip() == message
+    assert "Traceback" not in result.stdout
+    mocked_container_manager.verify_images.assert_not_called()
+    mocked_container_manager.create.assert_not_called()
+
+
 def test_create_stops_on_failed_host_check(runner, mocked_container_manager: MagicMock):
     mocked_container_manager.preflight.side_effect = PORT_FAILURE
     result = runner(cli.cli, "create")

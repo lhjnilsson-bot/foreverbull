@@ -183,7 +183,41 @@ def test_helm_template_has_rbac_and_no_docker_sock(chart: Path):
         for item in deployments["grafana"]["spec"]["template"]["spec"]["containers"][0].get("env") or []
     }
     assert grafana_env.get("BROKER_URL") == "foreverbull:50055"
+    assert grafana_env.get("FOREVERBULL_WEB_URL") == ""
     _assert_runtime_hardening(docs)
+
+
+def test_helm_web_url_empty_or_subpath(chart: Path):
+    empty = _run_helm(
+        "template",
+        "foreverbull",
+        str(chart),
+        "--namespace",
+        "foreverbull",
+        "--set-string",
+        "grafana.webUrl=",
+    )
+    assert empty.returncode == 0, empty.stdout + empty.stderr
+    assert _grafana_env(empty.stdout).get("FOREVERBULL_WEB_URL") == ""
+
+    subpath = _run_helm(
+        "template",
+        "foreverbull",
+        str(chart),
+        "--namespace",
+        "foreverbull",
+        "--set-string",
+        "grafana.webUrl=https://example.com/fb/",
+    )
+    assert subpath.returncode == 0, subpath.stdout + subpath.stderr
+    assert _grafana_env(subpath.stdout).get("FOREVERBULL_WEB_URL") == "https://example.com/fb/"
+
+
+def _grafana_env(rendered: str) -> dict[str, str]:
+    docs = _load_docs(rendered)
+    deployments = {doc["metadata"]["name"]: doc for doc in _docs_of_kind(docs, "Deployment")}
+    env = deployments["grafana"]["spec"]["template"]["spec"]["containers"][0].get("env") or []
+    return {item["name"]: item.get("value") for item in env}
 
 
 def test_helm_template_hostport_still_has_no_docker_sock(chart: Path):

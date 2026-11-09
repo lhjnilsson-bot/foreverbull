@@ -410,6 +410,7 @@ class TestClusterManager:
         assert "global.appImagePullPolicy=Always" in helm[0]
         assert "global.imageRepository=ghcr.io/lhjnilsson" in helm[0]
         assert "expose.hostPort=true" in helm[0]
+        assert "grafana.webUrl=http://localhost:8080" in helm[0]
         assert "credentials.allowDefaults=true" in helm[0]
         assert "broker.logLevel=debug" in helm[0]
         assert "--kube-context" in helm[0]
@@ -417,6 +418,79 @@ class TestClusterManager:
         assert "--namespace" in helm[0]
         assert helm[0][helm[0].index("--namespace") + 1] == "foreverbull"
         assert "replicaCount=0" in helm[0]
+
+    def test_grafana_web_url_strips_credentials_and_remote_origin(self, tmp_path: Path):
+        local = Config(
+            load_files=False,
+            environ={"FOREVERBULL_BROKER_URL": "https://ada:s3cret@example.com/fb/?token=secret"},
+            client_version=CLIENT_VERSION,
+        )
+        assert local.grafana_web_url() == "https://example.com/fb"
+        assert "s3cret" not in local.grafana_web_url()
+        runner = FakeRunner()
+        _manager(tmp_path, runner, config=local).create()
+        helm = runner.calls_starting_with("helm", "upgrade", "--install")[0]
+        assert "grafana.webUrl=https://example.com/fb" in helm
+        assert all("s3cret" not in arg and "secret" not in arg for arg in helm)
+
+        remote = Config(
+            {
+                "cluster": "remote",
+                "remote": {"broker_url": "https://fb.example.com/app/", "broker_address": "fb:50055"},
+            },
+            load_files=False,
+            environ={},
+            client_version=CLIENT_VERSION,
+        )
+        assert remote.grafana_web_url() == "https://fb.example.com/app"
+
+        missing = Config(
+            {"cluster": "remote", "remote": {}},
+            load_files=False,
+            environ={},
+            client_version=CLIENT_VERSION,
+        )
+        assert missing.grafana_web_url() == ""
+
+    def test_grafana_web_url_refuses_an_unusable_address(self):
+        env_message = (
+            "FOREVERBULL_BROKER_URL isn't a web address. Set it to the address foreverbull answers on, "
+            "such as http://localhost:8080, then run the command again. Nothing was changed."
+        )
+        remote_message = env_message.replace("FOREVERBULL_BROKER_URL", "remote.broker_url")
+        for raw in ("not a url", "ftp://example.com", "http://localhost:8080/$home"):
+            bad = Config(
+                load_files=False,
+                environ={"FOREVERBULL_BROKER_URL": raw},
+                client_version=CLIENT_VERSION,
+            )
+            with pytest.raises(ValueError, match=r"^FOREVERBULL_BROKER_URL isn't a web address") as raised:
+                bad.grafana_web_url()
+            assert str(raised.value) == env_message
+
+            remote = Config(
+                {"cluster": "remote", "remote": {"broker_url": raw}},
+                load_files=False,
+                environ={},
+                client_version=CLIENT_VERSION,
+            )
+            with pytest.raises(ValueError) as remote_raised:
+                remote.grafana_web_url()
+            assert str(remote_raised.value) == remote_message
+
+    def test_helm_web_url_refuses_a_comma(self):
+        config = Config(
+            load_files=False,
+            environ={"FOREVERBULL_BROKER_URL": "http://example.com/a,b"},
+            client_version=CLIENT_VERSION,
+        )
+        with pytest.raises(ValueError) as raised:
+            config._helm_web_url()
+        assert str(raised.value) == (
+            "The foreverbull address http://example.com/a,b has a comma in it, which fbenv can't pass to Grafana. "
+            "Remove the comma from FOREVERBULL_BROKER_URL or remote.broker_url, then run the command again. "
+            "Nothing was changed."
+        )
 
     def test_create_skips_kind_create_when_cluster_exists(self, tmp_path: Path):
         runner = FakeRunner()
@@ -443,6 +517,7 @@ class TestClusterManager:
         assert helm[helm.index("--namespace") + 1] == "fb"
         assert "expose.hostPort=false" in helm
         assert "credentials.allowDefaults=true" not in helm
+        assert helm[helm.index("--set-string") + 1] == "grafana.webUrl="
 
     def test_create_remote_skips_kind(self, tmp_path: Path):
         runner = FakeRunner()
