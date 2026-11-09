@@ -586,6 +586,7 @@ grafana:
   port: 3000
   brokerUrl: foreverbull:50055
   url: http://localhost:3000  # GRAFANA_URL on the broker; Kind host port
+  webUrl: ""  # FOREVERBULL_WEB_URL on Grafana; empty hides the links
 
 serviceAccount:
   create: true
@@ -605,7 +606,14 @@ NATS, Minio, and Postgres keep the commands, credentials, and volume paths
 above. Grafana gets `BROKER_URL` from `grafana.brokerUrl`. The broker gets `GRAFANA_URL`
 from `grafana.url` for `GetExperiment` deep links. CLI on the laptop still
 defaults to `http://localhost:3000`; remote installs should set `grafana.url`
-to the public Grafana origin.
+to the public Grafana origin. Grafana gets `FOREVERBULL_WEB_URL` from
+`grafana.webUrl` (default empty). That origin is what "Open in foreverbull"
+uses: `/backtests/{name}` on the execution dashboard when a backtest is
+selected, and `/backtests` otherwise, including the overview dashboard.
+`fbenv` sets `grafana.webUrl` from `FOREVERBULL_BROKER_URL` when that is set,
+otherwise `http://localhost:8080` on local Kind and `remote.broker_url` on
+remote. An empty value hides the links; an unusable one stops Grafana from
+starting. Do not put credentials or a `$` in `grafana.webUrl`.
 
 ## 🔒️ Container security
 
