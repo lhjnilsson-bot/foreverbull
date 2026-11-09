@@ -21,6 +21,7 @@ import {
   rowClass,
 } from "../components/fb";
 import { hasStoredDate, lastStoredPeriod, portfolioSeries } from "../equity";
+import { openRunInGrafana, rankRunsInGrafana } from "../grafana";
 import { type ResultCard, resultCard } from "../result-card";
 import type { Backtest, Execution, ExecutionResult, GetExecution } from "../types";
 import { postJson, useJson, type Load } from "../useJson";
@@ -158,6 +159,9 @@ export function BacktestDetail() {
   const { load: listLoad } = useOutletContext<BacktestList>();
   const listed = rowsOf(listLoad)?.find((item) => item.name === name);
   const [execRevision, setExecRevision] = useState(0);
+  const config = useJson<{ grafanaUrl?: unknown }>("/api/config");
+  const grafanaBase =
+    config.state === "ready" && typeof config.data.grafanaUrl === "string" ? config.data.grafanaUrl : null;
   const backtest = useJson<Backtest>(name ? `/api/backtests/${encodeURIComponent(name)}` : null);
   const executions = useJson<Execution[]>(
     name ? `/api/backtests/${encodeURIComponent(name)}/executions` : null,
@@ -183,6 +187,7 @@ export function BacktestDetail() {
   const on = assets.filter((asset) => asset.enabled).map((asset) => asset.symbol ?? "");
   const off = assets.filter((asset) => !asset.enabled).map((asset) => asset.symbol ?? "");
   const runs = executions.state === "ready" && Array.isArray(executions.data) ? executions.data : [];
+  const rank = b.name ? rankRunsInGrafana(grafanaBase ?? "", b.name) : null;
 
   return (
     <Detail k={b.name ?? name}>
@@ -201,6 +206,11 @@ export function BacktestDetail() {
         <Field label="Disabled">{off.filter(Boolean).join(", ") || "—"}</Field>
       </dl>
       <H2>Executions</H2>
+      {rank ? (
+        <p className="mb-3">
+          <GrafanaLink href={rank.href}>{rank.label}</GrafanaLink>
+        </p>
+      ) : null}
       {executions.state === "error" && executions.message ? (
         <p className="text-muted-foreground">{executions.message}</p>
       ) : null}
@@ -211,6 +221,7 @@ export function BacktestDetail() {
             execution={execution}
             revision={execRevision}
             benchmark={b.benchmark ?? ""}
+            grafanaBase={grafanaBase}
           />
         ))}
       </ul>
@@ -222,20 +233,28 @@ export function BacktestDetail() {
   );
 }
 
-function grafanaHref(id: string): string {
-  return `/d/ee9ep4jxtwkcgf?var-execution=${encodeURIComponent(id)}`;
+function GrafanaLink({ href, children }: { href: string; children: string }) {
+  return (
+    <a href={href} className="inline-flex items-center gap-1 text-primary" target="_blank" rel="noopener noreferrer">
+      {children}
+      <ArrowUpRight size={14} aria-hidden />
+    </a>
+  );
 }
 
 function ExecutionRow({
   execution,
   revision,
   benchmark,
+  grafanaBase,
 }: {
   execution: Execution;
   revision: number;
   benchmark: string;
+  grafanaBase: string | null;
 }) {
   const id = execution.id ?? "";
+  const run = openRunInGrafana(grafanaBase ?? "", id);
   const detail = useJson<GetExecution>(id ? `/api/executions/${encodeURIComponent(id)}` : null, revision);
   const periods = detail.state === "ready" && Array.isArray(detail.data.periods) ? detail.data.periods : [];
   const fromGet = lastStoredPeriod(periods) !== undefined;
@@ -262,10 +281,7 @@ function ExecutionRow({
             <button type="button" className="text-primary" onClick={() => setOpen(true)}>
               Portfolio
             </button>
-            <a href={grafanaHref(id)} className="inline-flex items-center gap-1 text-primary">
-              Open the run.
-              <ArrowUpRight size={14} aria-hidden />
-            </a>
+            {run ? <GrafanaLink href={run.href}>{run.label}</GrafanaLink> : null}
           </span>
         ) : null}
       </div>
@@ -277,7 +293,15 @@ function ExecutionRow({
         </div>
       ) : null}
       <Modal open={open} onClose={() => setOpen(false)} title={id ? `Run ${id}` : "Run"} wide>
-        <RunReport execution={execution} detail={detail} benchmark={benchmark} stored={stored} status={status} />
+        <RunReport
+          execution={execution}
+          detail={detail}
+          benchmark={benchmark}
+          stored={stored}
+          status={status}
+          runHref={run?.href ?? null}
+          runLabel={run?.label ?? ""}
+        />
       </Modal>
     </li>
   );
@@ -289,12 +313,16 @@ function RunReport({
   benchmark,
   stored,
   status,
+  runHref,
+  runLabel,
 }: {
   execution: Execution;
   detail: Load<GetExecution>;
   benchmark: string;
   stored: boolean;
   status: string;
+  runHref: string | null;
+  runLabel: string;
 }) {
   const periods = detail.state === "ready" && Array.isArray(detail.data.periods) ? detail.data.periods : [];
   const points = portfolioSeries(periods);
@@ -310,8 +338,6 @@ function RunReport({
     returnBasis: storedExecution?.returnBasis,
     foreignDividendsGross: storedExecution?.foreignDividendsGross,
   });
-  const id = execution.id ?? "";
-
   return (
     <div className="grid gap-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -326,12 +352,7 @@ function RunReport({
             <span className={stored ? "text-status-ready" : "text-muted-foreground"}>{status || "—"}</span>
           </Field>
         </dl>
-        {id ? (
-          <a href={grafanaHref(id)} className="inline-flex items-center gap-1 text-primary">
-            Open the run.
-            <ArrowUpRight size={14} aria-hidden />
-          </a>
-        ) : null}
+        {runHref ? <GrafanaLink href={runHref}>{runLabel}</GrafanaLink> : null}
       </div>
       {card?.ok ? <ResultCardView card={card.card} /> : null}
       {card && !card.ok ? <p className="text-muted-foreground">{card.message}</p> : null}

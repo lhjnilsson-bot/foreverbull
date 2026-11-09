@@ -37,8 +37,27 @@ const (
 func NewMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", health)
+	mux.HandleFunc("GET /api/config", uiConfig)
 	mux.HandleFunc("GET /", serveApp(pageFiles()))
 	return mux
+}
+
+// uiConfig tells the page where Grafana is. The value is the public origin
+// only: no userinfo, query, or fragment. An unusable GRAFANA_URL is an empty
+// string so the page hides the links instead of rendering a broken one.
+func uiConfig(w http.ResponseWriter, _ *http.Request) {
+	origin := ""
+	if public, ok := environment.PublicHTTPOrigin(environment.GetGrafanaURL()); ok {
+		origin = public
+	}
+	body, err := json.Marshal(struct {
+		GrafanaURL string `json:"grafanaUrl"`
+	}{GrafanaURL: origin})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, []byte(`{"error":"internal"}`))
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func health(w http.ResponseWriter, _ *http.Request) {

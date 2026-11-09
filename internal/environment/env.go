@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -346,6 +347,35 @@ func ParseGrafanaURL(value string) (*url.URL, error) {
 		return nil, fmt.Errorf("%s has no host; set it to the Grafana origin, such as %s", GrafanaURL, GrafanaURLDefault)
 	}
 	return u, nil
+}
+
+// PublicHTTPOrigin is the scheme, host, and path of an http(s) URL.
+// Userinfo, query, and fragment are dropped so they cannot be copied into a link.
+// An empty or unusable value returns false.
+func PublicHTTPOrigin(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || strings.ContainsAny(trimmed, " \t\r\n") {
+		return "", false
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		return "", false
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.RawPath = ""
+	cleaned := path.Clean("/" + strings.Trim(u.Path, "/"))
+	if cleaned == "/" || cleaned == "." {
+		u.Path = ""
+	} else {
+		u.Path = cleaned
+	}
+	origin := u.String()
+	if strings.Contains(origin, "@") || strings.ContainsAny(origin, " \t\r\n\"\\") {
+		return "", false
+	}
+	return origin, true
 }
 
 // ParseTrustedProxies parses a comma-separated list of IP addresses and CIDRs.

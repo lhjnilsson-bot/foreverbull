@@ -168,6 +168,34 @@ func TestSetupRefusesAnUnknownLogLevel(t *testing.T) {
 	}
 }
 
+func TestPublicHTTPOrigin(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+		ok   bool
+	}{
+		{raw: "http://localhost:3000", want: "http://localhost:3000", ok: true},
+		{raw: "https://example.com/grafana/", want: "https://example.com/grafana", ok: true},
+		{raw: "https://example.com/grafana/./", want: "https://example.com/grafana", ok: true},
+		{raw: "http://user:hunter2@localhost:3000/grafana?token=secret#x", want: "http://localhost:3000/grafana", ok: true},
+		{raw: "", ok: false},
+		{raw: "   ", ok: false},
+		{raw: "not a url", ok: false},
+		{raw: "ftp://localhost:3000", ok: false},
+		{raw: "http://", ok: false},
+		{raw: "javascript:alert(1)", ok: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.raw, func(t *testing.T) {
+			got, ok := PublicHTTPOrigin(tc.raw)
+			require.Equal(t, tc.ok, ok)
+			require.Equal(t, tc.want, got)
+			require.NotContains(t, got, "hunter2")
+			require.NotContains(t, got, "secret")
+		})
+	}
+}
+
 func TestSetupRefusesAnInvalidGrafanaURL(t *testing.T) {
 	cases := []struct {
 		value string

@@ -26,6 +26,35 @@ func TestHTTP(t *testing.T) {
 		require.Equal(t, `{"ok":true}`, rec.Body.String())
 	})
 
+	t.Run("config is the grafana origin", func(t *testing.T) {
+		t.Setenv(environment.GrafanaURL, "https://example.com/grafana/")
+		mux := NewMux()
+		req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.JSONEq(t, `{"grafanaUrl":"https://example.com/grafana"}`, rec.Body.String())
+	})
+
+	t.Run("config drops credentials and hides an unusable origin", func(t *testing.T) {
+		t.Setenv(environment.GrafanaURL, "http://user:hunter2@localhost:3000/grafana?token=secret")
+		mux := NewMux()
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.JSONEq(t, `{"grafanaUrl":"http://localhost:3000/grafana"}`, rec.Body.String())
+		require.NotContains(t, rec.Body.String(), "hunter2")
+		require.NotContains(t, rec.Body.String(), "secret")
+
+		t.Setenv(environment.GrafanaURL, "not a url")
+		rec = httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.JSONEq(t, `{"grafanaUrl":""}`, rec.Body.String())
+		require.NotContains(t, rec.Body.String(), "not a url")
+	})
+
 	t.Run("health rejects other methods", func(t *testing.T) {
 		mux := NewMux()
 		req := httptest.NewRequest(http.MethodPost, "/api/health", nil)
