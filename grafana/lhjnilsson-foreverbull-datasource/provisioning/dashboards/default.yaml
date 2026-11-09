@@ -4,6 +4,12 @@ apiVersion: 1
 #   executions.json         uid ee9ep4jxtwkcgf       (CLI / GetExperiment deep links)
 #   strategy-compare.json   uid fb-strategy-compare
 #   backtest-overview.json  uid fb-backtest-overview
+#
+# apply-web-links runs before Grafana and replaces __FOREVERBULL_WEB_URL__
+# from FOREVERBULL_WEB_URL. An empty value hides the links; an unusable one
+# stops Grafana from starting. Grafana does not expand environment variables
+# inside these JSON files. A dollar sign in the origin is unusable, because
+# Grafana would interpolate it.
 providers:
   - name: Foreverbull
     orgId: 1

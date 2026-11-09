@@ -68,6 +68,11 @@ RUN --mount=type=cache,target=/root/.cache/go-build,id=fb-grafana-go-build \
       *) echo "unsupported TARGETARCH ${TARGETARCH}" >&2; exit 1 ;; \
     esac
 
+# Same target OS and arch as the plugin binary. The Grafana stage does not
+# have a Go toolchain, and a build-platform binary would not run there.
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -o /out/apply-web-links ./cmd/apply-web-links
+
 FROM grafana/grafana-oss:13.0.2
 
 ARG TARGETOS
@@ -76,7 +81,12 @@ ARG TARGETARCH
 COPY --from=js-builder /app/dist/ /var/lib/grafana/plugins/lhjnilsson-foreverbull-datasource/
 COPY --from=go-builder /src/grafana/lhjnilsson-foreverbull-datasource/dist/gpx_foreverbull_${TARGETOS}_${TARGETARCH} /var/lib/grafana/plugins/lhjnilsson-foreverbull-datasource/gpx_foreverbull_${TARGETOS}_${TARGETARCH}
 COPY --from=go-builder /src/grafana/lhjnilsson-foreverbull-datasource/dist/go_plugin_build_manifest /var/lib/grafana/plugins/lhjnilsson-foreverbull-datasource/go_plugin_build_manifest
-COPY lhjnilsson-foreverbull-datasource/provisioning/ /etc/grafana/provisioning
+# The base image is already uid 472, so a later RUN cannot chown or chmod.
+# Provisioning is owned by 472 so the entrypoint can rewrite the dashboard
+# files. The two binaries stay root-owned and executable.
+COPY --chown=472:472 lhjnilsson-foreverbull-datasource/provisioning/ /etc/grafana/provisioning
+COPY --chmod=755 --from=go-builder /out/apply-web-links /usr/local/bin/apply-web-links
+COPY --chmod=755 entrypoint.sh /usr/local/bin/foreverbull-entrypoint
 
 # Enable unsigned plugins
 ENV GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=lhjnilsson-foreverbull-datasource
@@ -92,3 +102,5 @@ EXPOSE 3000
 # Chart runAsUser is 472. The OSS image user is that uid; pin it so the
 # published image stays non-root after the plugin layers.
 USER 472
+
+ENTRYPOINT ["/usr/local/bin/foreverbull-entrypoint"]

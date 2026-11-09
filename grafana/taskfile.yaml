@@ -10,6 +10,9 @@ tasks:
       - lhjnilsson-foreverbull-datasource/go.mod
       - lhjnilsson-foreverbull-datasource/go.sum
       - lhjnilsson-foreverbull-datasource/provisioning/**/*
+      - lhjnilsson-foreverbull-datasource/weblinks/**/*
+      - lhjnilsson-foreverbull-datasource/cmd/**/*
+      - entrypoint.sh
       - Dockerfile
       - ../go.mod
       - ../go.sum

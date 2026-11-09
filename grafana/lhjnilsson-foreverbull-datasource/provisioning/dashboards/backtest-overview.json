@@ -33,6 +33,18 @@
       "tooltip": "Inspect one run. Each row on this board opens that run.",
       "type": "link",
       "url": "/d/ee9ep4jxtwkcgf"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": true,
+      "title": "Open in foreverbull",
+      "tooltip": "Create a backtest or start a run in foreverbull.",
+      "type": "link",
+      "url": "__FOREVERBULL_WEB_URL__/backtests"
     }
   ],
   "templating": {

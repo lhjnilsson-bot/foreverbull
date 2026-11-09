@@ -4,6 +4,7 @@ import path from 'path';
 interface DashboardLink {
   url?: string;
   title?: string;
+  tooltip?: string;
 }
 
 interface DashboardTarget {
@@ -90,6 +91,18 @@ describe('backtest overview dashboard', () => {
     const link = (execution.json.links ?? []).find((item) => item.url === '/d/fb-backtest-overview');
     expect(link?.title).toBe('Backtest overview');
     expect(execution.raw).toContain('ee9ep4jxtwkcgf');
+  });
+
+  it('links each board back to foreverbull when the web origin is set', () => {
+    const executionLink = (execution.json.links ?? []).find((item) => item.title === 'Open in foreverbull');
+    const overviewLink = (overview.json.links ?? []).find((item) => item.title === 'Open in foreverbull');
+    expect(executionLink?.url).toBe('__FOREVERBULL_WEB_URL__${web_path}');
+    expect(executionLink?.tooltip).toBe('Open this backtest in foreverbull to run it again or share it.');
+    expect(overviewLink?.url).toBe('__FOREVERBULL_WEB_URL__/backtests');
+    expect(overviewLink?.tooltip).toBe('Create a backtest or start a run in foreverbull.');
+    expect(execution.raw).not.toContain('/backtests/');
+    expect(execution.raw).not.toContain('Open the run');
+    expect(compare.raw).not.toContain('Open in foreverbull');
   });
 
   it('shows total and price return side by side on the run page, the benchmark too', () => {

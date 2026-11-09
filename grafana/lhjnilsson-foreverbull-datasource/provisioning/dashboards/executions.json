@@ -48,6 +48,18 @@
       "tooltip": "Rank executions inside the time range",
       "type": "link",
       "url": "/d/fb-backtest-overview"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": true,
+      "title": "Open in foreverbull",
+      "tooltip": "Open this backtest in foreverbull to run it again or share it.",
+      "type": "link",
+      "url": "__FOREVERBULL_WEB_URL__${web_path}"
     }
   ],
   "templating": {
@@ -103,6 +115,32 @@
         "includeAll": false,
         "hide": 0,
         "skipUrlSync": false
+      },
+      {
+        "name": "web_path",
+        "label": "Web path",
+        "description": "Empty, or / plus the percent-encoded backtest name. The Open in foreverbull link appends it so an unset backtest stays /backtests.",
+        "type": "query",
+        "datasource": {
+          "type": "lhjnilsson-foreverbull-datasource",
+          "uid": "foreverbull"
+        },
+        "definition": "webpath ($backtest)",
+        "query": {
+          "refId": "WebPath",
+          "queryType": "GetExecutionMetric",
+          "source": "webpath",
+          "backtest": "$backtest"
+        },
+        "current": {},
+        "options": [],
+        "refresh": 1,
+        "regex": "",
+        "sort": 0,
+        "multi": false,
+        "includeAll": false,
+        "hide": 2,
+        "skipUrlSync": true
       }
     ]
   },

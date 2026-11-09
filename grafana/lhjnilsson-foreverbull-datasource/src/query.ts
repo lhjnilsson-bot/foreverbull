@@ -1,4 +1,5 @@
 import { MetricFindValue } from '@grafana/data';
+import { webBacktestPath } from './webPath';
 
 import {
   Execution,
@@ -108,6 +109,10 @@ export async function listVariableOptions(
   ds: VariableResourceClient,
   query: Partial<MyQuery>
 ): Promise<MetricFindValue[]> {
+  if ((query.source as string | undefined) === 'webpath') {
+    const path = webBacktestPath(query.backtest);
+    return [{ text: path, value: path }];
+  }
   const filter = resourceFilter(query);
   let items: ResourceDefinition[];
   switch (variableSource(query)) {

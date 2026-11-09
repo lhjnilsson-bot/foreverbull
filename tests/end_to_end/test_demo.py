@@ -170,6 +170,26 @@ def test_start_stop(runner, simple_algorithm):
 
     result = runner(env_cli.cli, "start", env={"VERSION": "local"})
     assert result.exit_code == 0, result.output
+    # The image entrypoint runs apply-web-links before Grafana. Kind passes
+    # the page origin, so the placeholder is gone and the overview link is absolute.
+    linked = kubectl(
+        "exec",
+        "deploy/grafana",
+        "--",
+        "cat",
+        "/etc/grafana/provisioning/dashboards/backtest-overview.json",
+    )
+    assert "http://localhost:8080/backtests" in linked
+    assert "__FOREVERBULL_WEB_URL__" not in linked
+    execution_dash = kubectl(
+        "exec",
+        "deploy/grafana",
+        "--",
+        "cat",
+        "/etc/grafana/provisioning/dashboards/executions.json",
+    )
+    assert "http://localhost:8080${web_path}" in execution_dash
+    assert "__FOREVERBULL_WEB_URL__" not in execution_dash
 
     result = runner(backtest_cli, f"create --file {backtest_file}")
     assert result.exit_code == 0, result.output

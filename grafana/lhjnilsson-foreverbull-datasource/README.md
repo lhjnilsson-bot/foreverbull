@@ -80,6 +80,8 @@ Deep links: `{GRAFANA_URL}/d/ee9ep4jxtwkcgf?var-execution={id}`.
 - Helm `grafana.url` sets broker env `GRAFANA_URL` for `GetExperiment.grafana_path`.
 - CLI `execution_link` reads `GRAFANA_URL` the same way.
 - Remote clusters set `grafana.url` / `GRAFANA_URL` to the public origin. Do not change the UID or `var-execution`.
+- The Web page uses that execution URL, and `{GRAFANA_URL}/d/fb-backtest-overview?var-backtest={name}` for one backtest. The variable name is `backtest`.
+- `FOREVERBULL_WEB_URL` (Helm `grafana.webUrl`, default empty; Kind via `fbenv` is `http://localhost:8080`) is the public foreverbull origin. "Open in foreverbull" on the execution dashboard is `{origin}/backtests/{name}` when a backtest is selected and `{origin}/backtests` when none is. On the overview dashboard it is `{origin}/backtests`. An empty value hides the links; an unusable one stops Grafana from starting. Do not put credentials or a `$` in `grafana.webUrl`.
 - Plugin-dev compose is host port **3001**. Do not point CLI or broker links there.
 
 ## Queries
