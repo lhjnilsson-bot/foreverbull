@@ -99,8 +99,11 @@ def exercise_broker_grpc_tls() -> None:
         try:
             try:
                 _health(insecure, 5)
-            except Exception:
-                pass
+            except grpc.RpcError as exc:
+                if exc.code() != grpc.StatusCode.UNAVAILABLE:
+                    raise AssertionError(
+                        f"plaintext gRPC failed with {exc.code()}, want UNAVAILABLE: {exc.details()}"
+                    ) from exc
             else:
                 raise AssertionError("plaintext gRPC reached the broker through Traefik")
         finally:
