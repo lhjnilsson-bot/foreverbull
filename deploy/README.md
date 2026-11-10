@@ -278,6 +278,8 @@ so the chart leaves the flag unset.
 `ingress.tls` defaults to false. Set it true, with `ingress.host` and
 `ingress.clusterIssuer`, to publish broker gRPC through Traefik. Traefik
 serves HTTP/2 on `ingress.entryPoint` (default `websecure`) for that host.
+`ingress.host` must be a dedicated name, such as `grpc.example.com`, not the
+web UI host, because the route matches every path.
 cert-manager issues the certificate from the ClusterIssuer you name. The
 nightly cluster already has an HTTP-01 Let's Encrypt issuer; this chart does
 not create one. Traefik dials the broker as h2c, because the broker serves

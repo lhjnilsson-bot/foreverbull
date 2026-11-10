@@ -105,7 +105,9 @@ broker:
 # (nightly: HTTP-01 Let's Encrypt). This chart does not create that issuer.
 ingress:
   tls: false
-  host: ""                  # required when tls is true; DNS name on the certificate and the route
+  # Dedicated DNS name, such as grpc.example.com. Required when tls is true.
+  # The route matches every path, so this must not be the web UI host.
+  host: ""
   clusterIssuer: ""         # required when tls is true; cert-manager ClusterIssuer name
   entryPoint: websecure     # Traefik entrypoint that serves HTTP/2 over TLS
 
