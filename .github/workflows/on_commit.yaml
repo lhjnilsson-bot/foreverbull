@@ -356,6 +356,12 @@ jobs:
 
   # Reuses the three image tarballs. fbenv only runs :local or the installed
   # client version, so the :on_commit tags are retagged before the test.
+  # Kind load saves those tags on the host, then the node imports them.
+  # Delete the artifact tarballs only after the local tags exist. Record
+  # host capacity and inodes before that load, and host plus Kind-node
+  # capacity and inodes after the demo or if that step fails. Host figures
+  # are df on the runner. Node figures are df inside the control-plane
+  # container. A failed removal or measurement fails the job.
   # FBENV_READY_TIMEOUT covers a cold Kind node pulling Postgres, NATS, and Minio.
   # Trading stays off: no profiles file, and fbenv does not enable it.
   product-e2e:
@@ -376,6 +382,8 @@ jobs:
       FBENV_READY_TIMEOUT: "900"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check product-e2e disk cleanup
+        run: bash .github/scripts/test_product_e2e_disk.sh
       - name: Download Foreverbull image
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -400,6 +408,8 @@ jobs:
           docker tag ghcr.io/lhjnilsson/foreverbull:on_commit ghcr.io/lhjnilsson/foreverbull:local
           docker tag ghcr.io/lhjnilsson/zipline:on_commit ghcr.io/lhjnilsson/zipline:local
           docker tag ghcr.io/lhjnilsson/fb-grafana:on_commit ghcr.io/lhjnilsson/fb-grafana:local
+      - name: Remove loaded image tarballs
+        run: bash .github/scripts/product_e2e_disk.sh drop-tarballs
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
@@ -422,9 +432,18 @@ jobs:
       - name: Sync the client workspace
         working-directory: ./client
         run: uv sync --all-packages --all-extras
+      - name: Record host disk before Kind load
+        run: bash .github/scripts/product_e2e_disk.sh host
       - name: Run the Kind backtest
+        id: kind-backtest
         working-directory: ./client
         run: uv run pytest ../tests/end_to_end/test_demo.py -vs
+      - name: Record host and Kind node disk
+        if: success() || steps.kind-backtest.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          bash .github/scripts/product_e2e_disk.sh host
+          bash .github/scripts/product_e2e_disk.sh kind-node
       - name: Dump the cluster
         if: failure()
         run: |
