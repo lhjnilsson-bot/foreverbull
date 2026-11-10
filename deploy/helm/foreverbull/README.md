@@ -22,6 +22,11 @@ helm upgrade --install foreverbull deploy/helm/foreverbull \
   --set expose.hostPort=false
 ```
 
+`ingress.tls` defaults to false, so this install does not publish a Traefik
+route. Set `ingress.tls=true` together with `ingress.host` and
+`ingress.clusterIssuer` when the cluster already has Traefik and a
+cert-manager ClusterIssuer. See [deploy/README.md](../../README.md).
+
 Generated Postgres/MinIO credentials live in Secret
 `foreverbull-credentials` in the release namespace and are reused on
 upgrade via a live-cluster lookup. Read them back with:

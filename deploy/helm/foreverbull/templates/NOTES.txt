@@ -18,6 +18,11 @@ Credentials (Secret foreverbull-credentials, namespace {{ .Release.Namespace }})
   kubectl get secret foreverbull-credentials -n {{ .Release.Namespace }} -o jsonpath='{.data.minio-secretKey}' | base64 -d; echo
 Docker socket: not mounted. Worker pods use ServiceAccount {{ include "foreverbull.serviceAccountName" . }}.
 
+{{- if .Values.ingress.tls }}
+
+Remote gRPC is TLS on Traefik entrypoint {{ .Values.ingress.entryPoint | default "websecure" }} for {{ .Values.ingress.host }}.
+Traefik dials foreverbull:{{ .Values.broker.grpcPort }} as h2c. The certificate comes from ClusterIssuer {{ .Values.ingress.clusterIssuer }}.
+{{- end }}
 {{- if .Values.expose.hostPort }}
 
 Host ports (Kind extraPortMappings / pod hostPort):

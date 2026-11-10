@@ -99,8 +99,15 @@ broker:
     adminUsername: ""
     # AUTH_COOKIE_SECURE. Null follows ingress.tls. Local Kind has no TLS, so the cookie stays unsecured.
     cookieSecure:
+# Remote broker gRPC. Off unless tls is true, same as the cookie flag.
+# The broker process stays plaintext. Traefik terminates TLS and dials it as h2c.
+# cert-manager issues the certificate from a ClusterIssuer that already exists
+# (nightly: HTTP-01 Let's Encrypt). This chart does not create that issuer.
 ingress:
   tls: false
+  host: ""                  # required when tls is true; DNS name on the certificate and the route
+  clusterIssuer: ""         # required when tls is true; cert-manager ClusterIssuer name
+  entryPoint: websecure     # Traefik entrypoint that serves HTTP/2 over TLS
 
 zipline:
   grpcPort: 50055
