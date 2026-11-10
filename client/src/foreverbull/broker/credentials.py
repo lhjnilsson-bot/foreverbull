@@ -19,8 +19,11 @@ _cli_token: ContextVar[str] = ContextVar("foreverbull_cli_token", default="")
 
 
 # A token may cross plaintext gRPC or HTTP only to these hosts. "localhost" is
-# the Kind host port mapping that `fbenv` publishes; anything else needs TLS.
+# the Kind host port mapping that `fbenv` publishes. Any other host is remote:
+# gRPC sends the token over TLS, or the call fails. There is no plaintext fallback.
 PLAINTEXT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+# PEM trust anchor for a private CA. Unset uses the system trust store.
+CA_ENV = "FOREVERBULL_BROKER_CA"
 
 
 class TokenFileError(Exception):
@@ -205,15 +208,47 @@ def delete_token_files(home: Path | None = None) -> Path:
     return path
 
 
+def _plaintext_host(host: str) -> bool:
+    """True for loopback and the Kind host port. Everything else is remote."""
+    return host.strip().strip("[]").lower() in PLAINTEXT_HOSTS
+
+
 def check_plaintext_host(host: str) -> None:
     """Refuse to send a credential over a plaintext connection to a host that is not loopback or Kind."""
-    cleaned = host.strip().strip("[]").lower()
-    if cleaned in PLAINTEXT_HOSTS:
+    if _plaintext_host(host):
         return
     raise InsecureTransportError(
         f"fbull won't send your token to {host} without encryption. "
         "Use an https:// address, or, for a local install, 127.0.0.1 or localhost."
     )
+
+
+def tls_channel_credentials(host: str) -> grpc.ChannelCredentials:
+    """Trust anchors for a remote broker. A set CA path that cannot be used fails the call."""
+    raw = os.environ.get(CA_ENV, "").strip()
+    if not raw:
+        return grpc.ssl_channel_credentials()
+    path = Path(raw)
+    try:
+        pem = path.read_bytes()
+    except OSError:
+        raise InsecureTransportError(
+            f"fbull won't send your token to {host} without encryption. {CA_ENV} at {path} can't be read."
+        ) from None
+    if not pem.strip():
+        raise InsecureTransportError(
+            f"fbull won't send your token to {host} without encryption. {CA_ENV} at {path} is empty."
+        )
+    if b"-----BEGIN CERTIFICATE-----" not in pem:
+        raise InsecureTransportError(
+            f"fbull won't send your token to {host} without encryption. {CA_ENV} at {path} is not a PEM certificate."
+        )
+    try:
+        return grpc.ssl_channel_credentials(root_certificates=pem)
+    except Exception as exc:
+        raise InsecureTransportError(
+            f"fbull won't send your token to {host} without encryption. {CA_ENV} at {path} is not a PEM certificate."
+        ) from exc
 
 
 def _private_dir(directory: Path) -> None:
@@ -267,13 +302,17 @@ def _check_private(path: Path, mode: int) -> None:
 def broker_channel(address: str) -> grpc.Channel:
     """Broker channel. No metadata when no token is configured, so authentication-off calls stay open.
 
-    The channel is plaintext, so a token is sent only to 127.0.0.1 or the Kind host.
+    A token to 127.0.0.1, ::1, or localhost uses plaintext. Any other host uses TLS.
+    A TLS setup failure is returned. The call does not open a plaintext channel instead.
     """
     token = resolve_token()
     if not token:
         return grpc.insecure_channel(address)
-    check_plaintext_host(_address_host(address))
-    channel = grpc.insecure_channel(address)
+    host = _address_host(address)
+    if _plaintext_host(host):
+        channel = grpc.insecure_channel(address)
+    else:
+        channel = grpc.secure_channel(address, tls_channel_credentials(host))
     return grpc.intercept_channel(channel, _MetadataInterceptor(((_AUTHORIZATION, f"Bearer {token}"),)))
 
 

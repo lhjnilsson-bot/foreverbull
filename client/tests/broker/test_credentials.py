@@ -8,6 +8,7 @@ import pytest
 from foreverbull.broker import credentials
 from foreverbull.broker.config import resolve_broker_url
 from foreverbull.broker.config import save_cluster_config
+from foreverbull.broker.credentials import CA_ENV
 from foreverbull.broker.credentials import InsecureTransportError
 from foreverbull.broker.credentials import TokenFileError
 from foreverbull.broker.credentials import TokenMeta
@@ -179,15 +180,108 @@ def test_token_goes_over_plaintext_grpc_only_to_loopback_or_kind(monkeypatch, ad
     broker_channel(address).close()
 
 
-@pytest.mark.parametrize("address", ["fb.example.com:50055", "10.0.0.5:50055", "127.0.0.1.example.com:50055"])
-def test_token_is_refused_over_plaintext_grpc_to_a_remote_host(monkeypatch, address):
+@pytest.mark.parametrize(
+    "address",
+    ["fb.example.com:50055", "10.0.0.5:50055", "127.0.0.1.example.com:50055", "[2001:db8::1]:443"],
+)
+def test_token_to_a_remote_host_uses_tls_and_not_plaintext(monkeypatch, address):
     monkeypatch.setenv("FOREVERBULL_TOKEN", "fb_secret")
+    monkeypatch.delenv(CA_ENV, raising=False)
+    plaintext: list[str] = []
+    monkeypatch.setattr(credentials.grpc, "insecure_channel", lambda addr: plaintext.append(addr))
+    broker_channel(address).close()
+    assert plaintext == []
+
+
+def test_tls_failure_does_not_fall_back_to_plaintext(monkeypatch):
+    monkeypatch.setenv("FOREVERBULL_TOKEN", "fb_secret")
+    monkeypatch.delenv(CA_ENV, raising=False)
+    plaintext: list[str] = []
+
+    def boom(address, creds):
+        raise RuntimeError(f"tls setup failed for {address}")
+
+    monkeypatch.setattr(credentials.grpc, "secure_channel", boom)
+    monkeypatch.setattr(credentials.grpc, "insecure_channel", lambda addr: plaintext.append(addr))
+    with pytest.raises(RuntimeError, match="tls setup failed for fb.example.com:443"):
+        broker_channel("fb.example.com:443")
+    assert plaintext == []
+
+
+def test_loopback_stays_plaintext_when_a_private_ca_is_set(monkeypatch, tmp_path: Path):
+    pem = tmp_path / "ca.pem"
+    pem.write_bytes(b"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
+    monkeypatch.setenv("FOREVERBULL_TOKEN", "fb_secret")
+    monkeypatch.setenv(CA_ENV, str(pem))
+    secure: list[str] = []
+    monkeypatch.setattr(credentials.grpc, "secure_channel", lambda *args, **kwargs: secure.append("called"))
+    broker_channel("127.0.0.1:50055").close()
+    assert secure == []
+
+
+def test_private_ca_is_the_trust_anchor(monkeypatch, tmp_path: Path):
+    pem = tmp_path / "ca.pem"
+    body = b"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    pem.write_bytes(body)
+    monkeypatch.setenv("FOREVERBULL_TOKEN", "fb_secret")
+    monkeypatch.setenv(CA_ENV, str(pem))
+    seen: dict[str, object] = {}
+
+    def creds(root_certificates=None, private_key=None, certificate_chain=None):
+        seen["roots"] = root_certificates
+        return "creds"
+
+    def secure(address, channel_credentials, options=None, compression=None):
+        seen["address"] = address
+        seen["credentials"] = channel_credentials
+        return credentials.grpc.insecure_channel("127.0.0.1:1")
+
+    monkeypatch.setattr(credentials.grpc, "ssl_channel_credentials", creds)
+    monkeypatch.setattr(credentials.grpc, "secure_channel", secure)
+    broker_channel("fb.example.com:443").close()
+    assert seen["roots"] == body
+    assert seen["address"] == "fb.example.com:443"
+    assert seen["credentials"] == "creds"
+
+
+def test_missing_private_ca_refuses_the_token(monkeypatch, tmp_path: Path):
+    missing = tmp_path / "missing.pem"
+    monkeypatch.setenv("FOREVERBULL_TOKEN", "fb_secret")
+    monkeypatch.setenv(CA_ENV, str(missing))
+    plaintext: list[str] = []
+    monkeypatch.setattr(credentials.grpc, "insecure_channel", lambda addr: plaintext.append(addr))
     with pytest.raises(InsecureTransportError) as raised:
-        broker_channel(address)
-    host = address.rsplit(":", 1)[0]
+        broker_channel("fb.example.com:443")
     assert str(raised.value) == (
-        f"fbull won't send your token to {host} without encryption. "
-        "Use an https:// address, or, for a local install, 127.0.0.1 or localhost."
+        f"fbull won't send your token to fb.example.com without encryption. {CA_ENV} at {missing} can't be read."
+    )
+    assert plaintext == []
+
+
+def test_a_private_ca_that_is_not_a_certificate_refuses_the_token(monkeypatch, tmp_path: Path):
+    pem = tmp_path / "ca.pem"
+    pem.write_bytes(b"not a certificate\n")
+    monkeypatch.setenv("FOREVERBULL_TOKEN", "fb_secret")
+    monkeypatch.setenv(CA_ENV, str(pem))
+    plaintext: list[str] = []
+    monkeypatch.setattr(credentials.grpc, "insecure_channel", lambda addr: plaintext.append(addr))
+    with pytest.raises(InsecureTransportError) as raised:
+        broker_channel("fb.example.com:443")
+    assert str(raised.value) == (
+        f"fbull won't send your token to fb.example.com without encryption. {CA_ENV} at {pem} is not a PEM certificate."
+    )
+    assert plaintext == []
+
+
+def test_empty_private_ca_refuses_the_token(monkeypatch, tmp_path: Path):
+    pem = tmp_path / "ca.pem"
+    pem.write_bytes(b" \n")
+    monkeypatch.setenv("FOREVERBULL_TOKEN", "fb_secret")
+    monkeypatch.setenv(CA_ENV, str(pem))
+    with pytest.raises(InsecureTransportError) as raised:
+        broker_channel("fb.example.com:443")
+    assert str(raised.value) == (
+        f"fbull won't send your token to fb.example.com without encryption. {CA_ENV} at {pem} is empty."
     )
 
 
