@@ -377,13 +377,12 @@ def test_a_remote_failure_without_a_token_does_not_mention_the_token(monkeypatch
     with pytest.raises(InsecureTransportError) as raised:
         broker_channel("fb.example.com:443")
     assert str(raised.value) == (
-        "fbull is refusing to connect to remote broker fb.example.com without TLS. "
-        f"{CA_ENV} at {missing} can't be read."
+        f"fbull can't connect to fb.example.com over TLS. {CA_ENV} at {missing} can't be read."
     )
     with pytest.raises(InsecureTransportError) as raised:
         broker_channel("not a host")
     assert str(raised.value) == (
-        "fbull is refusing to connect to `not a host` without TLS because it isn't a host:port address. "
+        "fbull can't connect to `not a host` because it isn't a host:port address. "
         "Set FOREVERBULL_BROKER_ADDRESS or remote.broker_address to host:port, for example 127.0.0.1:50055."
     )
 

@@ -226,7 +226,7 @@ def _remote_tls_error(host: str, detail: str, *, token: bool) -> InsecureTranspo
     """A remote dial that cannot use TLS. A token names the token. No token does not."""
     if token:
         return InsecureTransportError(f"fbull won't send your token to {host} without encryption. {detail}")
-    return InsecureTransportError(f"fbull is refusing to connect to remote broker {host} without TLS. {detail}")
+    return InsecureTransportError(f"fbull can't connect to {host} over TLS. {detail}")
 
 
 def tls_channel_credentials(host: str, *, token: bool) -> grpc.ChannelCredentials:
@@ -335,7 +335,7 @@ def _address_host(address: str, *, token: bool = False) -> str:
                 "Set FOREVERBULL_BROKER_ADDRESS or remote.broker_address to host:port, for example 127.0.0.1:50055."
             )
         raise InsecureTransportError(
-            f"fbull is refusing to connect to `{address}` without TLS because it isn't a host:port address. "
+            f"fbull can't connect to `{address}` because it isn't a host:port address. "
             "Set FOREVERBULL_BROKER_ADDRESS or remote.broker_address to host:port, for example 127.0.0.1:50055."
         )
     return match.group("v6") or match.group("host")
