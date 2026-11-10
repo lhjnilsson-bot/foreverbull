@@ -18,9 +18,8 @@ _AUTHORIZATION = "authorization"
 _cli_token: ContextVar[str] = ContextVar("foreverbull_cli_token", default="")
 
 
-# A token may cross plaintext gRPC or HTTP only to these hosts. "localhost" is
-# the Kind host port mapping that `fbenv` publishes. Any other host is remote:
-# gRPC sends the token over TLS, or the call fails. There is no plaintext fallback.
+# Plaintext gRPC is only for these hosts. "localhost" is the Kind host port
+# that `fbenv` publishes. Any other host is remote and uses TLS, token or not.
 PLAINTEXT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 # PEM trust anchor for a private CA. Unset uses the system trust store.
 CA_ENV = "FOREVERBULL_BROKER_CA"
@@ -300,19 +299,19 @@ def _check_private(path: Path, mode: int) -> None:
 
 
 def broker_channel(address: str) -> grpc.Channel:
-    """Broker channel. No metadata when no token is configured, so authentication-off calls stay open.
+    """Broker channel. The host decides the transport. The token only adds authorization metadata.
 
-    A token to 127.0.0.1, ::1, or localhost uses plaintext. Any other host uses TLS.
+    127.0.0.1, ::1, and localhost stay plaintext. Any other host uses TLS.
     A TLS setup failure is returned. The call does not open a plaintext channel instead.
     """
-    token = resolve_token()
-    if not token:
-        return grpc.insecure_channel(address)
     host = _address_host(address)
     if _plaintext_host(host):
         channel = grpc.insecure_channel(address)
     else:
         channel = grpc.secure_channel(address, tls_channel_credentials(host))
+    token = resolve_token()
+    if not token:
+        return channel
     return grpc.intercept_channel(channel, _MetadataInterceptor(((_AUTHORIZATION, f"Bearer {token}"),)))
 
 

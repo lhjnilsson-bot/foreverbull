@@ -232,7 +232,7 @@ CLI flags `--cluster`, `--kubeconfig`, `--context`, `--namespace`, `--broker-add
 
 Published host ports (Kind `extraPortMappings` + chart `expose.hostPort=true`): Postgres `5432`, NATS `4222`, Minio `9000`, Foreverbull gRPC `50055`, Foreverbull HTTP `8080`, backtest `27000–27015`, Grafana `3000`. Persistence is cluster PVCs (`persistence.*`), not host binds under `.foreverbull/{postgres,minio,nats}`.
 
-Python broker stubs resolve the address in this order: `FOREVERBULL_BROKER_ADDRESS` → `remote.broker_address` when `cluster: remote` → `localhost:50055` when `cluster: local`. A token to a host other than `127.0.0.1`, `::1`, or `localhost` is sent only over TLS (`FOREVERBULL_BROKER_CA` is an optional PEM file; otherwise the system trust store). There is no plaintext fallback. Grafana in-cluster uses `BROKER_URL=foreverbull:50055`. Host Grafana is `http://localhost:3000`.
+Python broker stubs resolve the address in this order: `FOREVERBULL_BROKER_ADDRESS` → `remote.broker_address` when `cluster: remote` → `localhost:50055` when `cluster: local`. A host other than `127.0.0.1`, `::1`, or `localhost` always uses TLS, with or without a token (`FOREVERBULL_BROKER_CA` is an optional PEM file; otherwise the system trust store). The token only adds the authorization metadata. There is no plaintext fallback. Grafana in-cluster uses `BROKER_URL=foreverbull:50055`. Host Grafana is `http://localhost:3000`.
 
 ### Grafana analysis
 
@@ -300,7 +300,7 @@ Go server defaults are in `internal/environment/env.go`. Empty optional vars are
 | `FOREVERBULL_WEB_URL` | Public foreverbull origin for Grafana "Open in foreverbull". Helm `grafana.webUrl` sets it on the Grafana pod. The chart default is empty. `fbenv` passes `FOREVERBULL_BROKER_URL`, else local `http://localhost:8080`, else `remote.broker_url`. An empty value hides the links; an unusable one stops Grafana from starting. Execution dashboard opens `/backtests/{name}` when a backtest is selected and `/backtests` when none is; overview opens `/backtests`. Do not put credentials or `$` in the value |
 | `VERSION` | Image tag for `fbenv` / chart `global.imageTag` (`ghcr.io/lhjnilsson/{foreverbull,zipline,fb-grafana}`; prefix is CLI `IMAGE_REPOSITORY`, passed as chart `global.imageRepository`). Unset or `latest`: published nightly channel on public GHCR. `local`: images from `task build`. `fbenv` refuses any other value. Image-pull fails-before-changes is local-Kind only; remote nodes pull after Helm runs |
 | `FOREVERBULL_BROKER_ADDRESS` | Python stubs/CLI broker `host:port` (highest priority) |
-| `FOREVERBULL_BROKER_CA` | PEM file trusted for remote broker gRPC. Unset uses the system trust store. A token is not sent in plaintext to a host other than `127.0.0.1`, `::1`, or `localhost` |
+| `FOREVERBULL_BROKER_CA` | PEM file trusted for remote broker gRPC. Unset uses the system trust store. Remote gRPC is always TLS. `127.0.0.1`, `::1`, and `localhost` stay plaintext |
 | `FOREVERBULL_CONFIG` | Explicit cluster config YAML path |
 | `FOREVERBULL_BROKER_URL` | Broker HTTP origin for `fbull login` / `logout`. Default `http://localhost:8080` on local Kind; remote reads `remote.broker_url`. Must be `https://` unless the host is `127.0.0.1` or `localhost` |
 | `DATABASE_URL` | Zipline ingest and the pytest plugin (Testcontainers). Strategy workers do not receive it |

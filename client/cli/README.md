@@ -30,7 +30,7 @@ Broker address (`foreverbull.broker.config.resolve_broker_address`):
 2. `remote.broker_address` when cluster config is `remote`
 3. `localhost:50055` when cluster is `local` (the default)
 
-A token is sent to a remote broker only over TLS. `127.0.0.1`, `::1`, and `localhost` stay plaintext, which is the Kind host port. Any other host is remote: `fbull` opens a TLS channel and does not fall back to plaintext. A private CA is the PEM file in `FOREVERBULL_BROKER_CA`. When that variable is unset, the system trust store is used, which covers a public Let's Encrypt certificate. A CA path that cannot be read fails the call.
+A remote broker is always TLS, with or without a token. `127.0.0.1`, `::1`, and `localhost` stay plaintext, which is the Kind host port. Any other host is remote: `fbull` opens a TLS channel and does not fall back to plaintext. The token only adds the authorization metadata. A private CA is the PEM file in `FOREVERBULL_BROKER_CA`. When that variable is unset, the system trust store is used, which covers a public Let's Encrypt certificate. A CA path that cannot be read fails the call.
 
 Logging: `-v` warning, `-vv` info, `-vvv` debug (`LOGGING_LEVEL`).
 
