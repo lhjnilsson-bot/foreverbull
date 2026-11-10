@@ -1,18 +1,18 @@
-import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import { webBacktestPath } from './webPath.ts';
+import { webBacktestPath } from './webPath';
 
-test('an unset backtest links to /backtests with no trailing slash', () => {
-  assert.equal(webBacktestPath(undefined), '/backtests');
-  assert.equal(webBacktestPath(''), '/backtests');
-  assert.equal(webBacktestPath('   '), '/backtests');
-  assert.equal(webBacktestPath('$backtest'), '/backtests');
-  assert.equal(webBacktestPath('*'), '/backtests');
-  assert.equal(webBacktestPath('All'), '/backtests');
-});
+describe('web backtest path', () => {
+  it('an unset backtest links to /backtests with no trailing slash', () => {
+    expect(webBacktestPath(undefined)).toBe('/backtests');
+    expect(webBacktestPath('')).toBe('/backtests');
+    expect(webBacktestPath('   ')).toBe('/backtests');
+    expect(webBacktestPath('$backtest')).toBe('/backtests');
+    expect(webBacktestPath('*')).toBe('/backtests');
+    expect(webBacktestPath('All')).toBe('/backtests');
+  });
 
-test('a selected backtest is one encoded path segment', () => {
-  assert.equal(webBacktestPath('nasdaq100'), '/backtests/nasdaq100');
-  assert.equal(webBacktestPath('eu small'), '/backtests/eu%20small');
-  assert.equal(webBacktestPath('a/b'), '/backtests/a%2Fb');
+  it('a selected backtest is one encoded path segment', () => {
+    expect(webBacktestPath('nasdaq100')).toBe('/backtests/nasdaq100');
+    expect(webBacktestPath('eu small')).toBe('/backtests/eu%20small');
+    expect(webBacktestPath('a/b')).toBe('/backtests/a%2Fb');
+  });
 });
