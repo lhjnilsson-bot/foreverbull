@@ -457,10 +457,16 @@ uv run fbenv use remote \
   --kubeconfig /path/to/kubeconfig \
   --context my-context \
   --namespace my-namespace \
-  --broker-address host:50055
+  --broker-address grpc.example.com:443
 uv run fbenv create
 uv run fbenv start
 ```
+
+`grpc.example.com` is `ingress.host`, and the chart is installed with
+`ingress.tls=true`. `fbull` dials that name with TLS. A remote
+`host:50055` is plaintext and is refused. The other way to reach the
+broker is `kubectl port-forward` of the broker Service to
+`localhost:50055`, which stays plaintext because it is loopback.
 
 Or install the chart against a real cluster:
 
@@ -473,8 +479,10 @@ helm upgrade --install foreverbull deploy/helm/foreverbull \
   --set expose.hostPort=false
 ```
 
-Set `cluster: remote` and `remote.broker_address` in config (or
-`FOREVERBULL_BROKER_ADDRESS`). Do not pass Alpaca keys as chart values.
+Set `cluster: remote` and `remote.broker_address` to `<ingress.host>:443`
+(or `FOREVERBULL_BROKER_ADDRESS`) with `ingress.tls=true`. Do not pass
+Alpaca keys as chart values. A `kubectl port-forward` to
+`localhost:50055` is the plaintext alternative.
 
 Override defaults with `--set` or `-f my-values.yaml`. Check the chart without
 a cluster:

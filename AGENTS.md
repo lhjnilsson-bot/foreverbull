@@ -219,7 +219,7 @@ Useful `fbenv` commands (from `client/`):
 uv run fbenv status
 uv run fbenv use                         # print selected cluster
 uv run fbenv use local                   # Kind (default); writes .foreverbull/config.yaml
-uv run fbenv use remote --kubeconfig … --context … --namespace … --broker-address host:50055
+uv run fbenv use remote --kubeconfig … --context … --namespace … --broker-address grpc.example.com:443
 VERSION=local uv run fbenv create        # Kind cluster + helm upgrade --install, workloads stopped
 uv run fbenv start                       # scale deployments to 1 and wait until ready
 uv run fbenv stop                        # scale to 0
