@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import pathlib
@@ -130,6 +131,16 @@ def bundle_state(backtest: str) -> dict:
     return json.loads(zipline_bundle("state", backtest).strip().splitlines()[-1])
 
 
+def exercise_broker_grpc_tls() -> None:
+    path = pathlib.Path(__file__).with_name("grpc_tls.py")
+    spec = importlib.util.spec_from_file_location("foreverbull_e2e_grpc_tls", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.exercise_broker_grpc_tls()
+
+
 def assert_run_traded(output: str) -> None:
     """The run made trades and measured a nonzero benchmark.
 
@@ -190,6 +201,9 @@ def test_start_stop(runner, simple_algorithm):
     )
     assert "http://localhost:8080${web_path}" in execution_dash
     assert "__FOREVERBULL_WEB_URL__" not in execution_dash
+
+    # Remote gRPC through Traefik, before the demo's plaintext localhost calls.
+    exercise_broker_grpc_tls()
 
     result = runner(backtest_cli, f"create --file {backtest_file}")
     assert result.exit_code == 0, result.output
