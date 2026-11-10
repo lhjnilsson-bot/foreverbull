@@ -195,8 +195,8 @@ class TestForeverbull:
 
         set_cli_token(None)
         monkeypatch.setattr(
-            "foreverbull.broker.credentials.grpc.insecure_channel",
-            lambda addr: seen.append(addr) or MagicMock(),
+            "foreverbull.broker.credentials.grpc.secure_channel",
+            lambda addr, creds: seen.append(addr) or MagicMock(),
         )
         monkeypatch.setattr(
             "foreverbull.foreverbull.backtest_service_pb_grpc.BacktestServicerClientSync",

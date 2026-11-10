@@ -32,7 +32,7 @@ remote:
   # Required for remote. Local always uses localhost:50055.
   # Override at runtime with FOREVERBULL_BROKER_ADDRESS (highest priority).
   # Select cluster with: fbenv use local|remote
-  # A token to this host uses TLS. 127.0.0.1, ::1, and localhost stay plaintext.
+  # This host always uses TLS, with or without a token. 127.0.0.1, ::1, and localhost stay plaintext.
   # FOREVERBULL_BROKER_CA is a PEM file when the certificate is not in the system trust store.
   broker_address: ""
   # https:// origin of the broker's web UI, where `fbull login` signs in.

@@ -337,10 +337,14 @@ def test_the_token_is_written_through_an_unpredictable_temporary_file(tmp_path: 
     assert sorted(p.name for p in path.parent.iterdir()) == [f".token.{os.getpid()}.tmp", "token"]
 
 
-def test_no_token_opens_any_plaintext_channel(monkeypatch, tmp_path: Path):
+def test_remote_host_without_a_token_uses_tls_and_not_plaintext(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("FOREVERBULL_TOKEN", raising=False)
+    monkeypatch.delenv(CA_ENV, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
+    plaintext: list[str] = []
+    monkeypatch.setattr(credentials.grpc, "insecure_channel", lambda addr: plaintext.append(addr))
     broker_channel("fb.example.com:50055").close()
+    assert plaintext == []
 
 
 def test_broker_url_order(tmp_path: Path):
