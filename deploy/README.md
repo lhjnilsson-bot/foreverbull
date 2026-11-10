@@ -275,6 +275,17 @@ TLS the chart sets `AUTH_COOKIE_SECURE=true` when `ingress.tls` is true. The
 session cookie name is then `__Host-fb_session`. Local Kind is plain HTTP,
 so the chart leaves the flag unset.
 
+`ingress.tls` defaults to false. Set it true, with `ingress.host` and
+`ingress.clusterIssuer`, to publish broker gRPC through Traefik. Traefik
+serves HTTP/2 on `ingress.entryPoint` (default `websecure`) for that host.
+cert-manager issues the certificate from the ClusterIssuer you name. The
+nightly cluster already has an HTTP-01 Let's Encrypt issuer; this chart does
+not create one. Traefik dials the broker as h2c, because the broker serves
+plaintext gRPC. A missing host, a missing issuer, or a name that is not a
+DNS name fails the install. The rendered objects are Certificate
+`foreverbull-grpc` (Secret `foreverbull-grpc-tls`) and IngressRoute
+`foreverbull-grpc`.
+
 Broker gRPC inside the cluster is plaintext. Grafana dials
 `foreverbull:50055` and its NetworkPolicy allows only DNS and that port.
 Set `GRAFANA_BROKER_TOKEN` to a `read` token minted from a dedicated editor

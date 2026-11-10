@@ -403,12 +403,59 @@ if grep -A2 -E '^ +- name: AUTH_COOKIE_SECURE$' "${first_render}" | grep -q 'val
   echo "default chart must leave AUTH_COOKIE_SECURE unset" >&2
   exit 1
 fi
+if grep -Eq 'traefik\.io|cert-manager\.io|scheme: h2c' "${first_render}"; then
+  echo "default chart must not publish the Traefik gRPC route" >&2
+  exit 1
+fi
+if output="$(helm template "${RELEASE}" "${CHART}" --namespace "${NAMESPACE}" --set ingress.tls=true 2>&1)"; then
+  echo "ingress.tls without ingress.host must fail" >&2
+  exit 1
+fi
+if ! grep -q 'ingress.host' <<<"${output}"; then
+  echo "ingress.tls failure must name ingress.host: ${output}" >&2
+  exit 1
+fi
+if output="$(helm template "${RELEASE}" "${CHART}" --namespace "${NAMESPACE}" --set ingress.tls=true --set ingress.host=grpc.foreverbull.test 2>&1)"; then
+  echo "ingress.tls without ingress.clusterIssuer must fail" >&2
+  exit 1
+fi
+if ! grep -q 'ingress.clusterIssuer' <<<"${output}"; then
+  echo "ingress.tls failure must name ingress.clusterIssuer: ${output}" >&2
+  exit 1
+fi
+if output="$(helm template "${RELEASE}" "${CHART}" --namespace "${NAMESPACE}" --set ingress.tls=true --set ingress.host='bad host' --set ingress.clusterIssuer=foreverbull-ca 2>&1)"; then
+  echo "ingress.tls must refuse a host that is not a DNS name" >&2
+  exit 1
+fi
+if ! grep -q 'ingress.host' <<<"${output}"; then
+  echo "bad ingress.host failure must name ingress.host: ${output}" >&2
+  exit 1
+fi
 tls_render="$(mktemp)"
-helm template "${RELEASE}" "${CHART}" --namespace "${NAMESPACE}" --set ingress.tls=true > "${tls_render}"
+helm template "${RELEASE}" "${CHART}" --namespace "${NAMESPACE}" \
+  --set ingress.tls=true \
+  --set ingress.host=grpc.foreverbull.test \
+  --set ingress.clusterIssuer=foreverbull-ca > "${tls_render}"
 if ! grep -A1 -E '^ +- name: AUTH_COOKIE_SECURE$' "${tls_render}" | grep -q 'value: "true"'; then
   echo "ingress.tls must set AUTH_COOKIE_SECURE" >&2
   exit 1
 fi
+for required in \
+  "kind: Certificate" \
+  "kind: IngressRoute" \
+  "secretName: foreverbull-grpc-tls" \
+  'name: "foreverbull-ca"' \
+  'kind: ClusterIssuer' \
+  "- \"websecure\"" \
+  "Host(\`grpc.foreverbull.test\`)" \
+  "port: 50055" \
+  "scheme: h2c"
+do
+  if ! grep -Fq -- "${required}" "${tls_render}"; then
+    echo "ingress.tls render missing ${required}" >&2
+    exit 1
+  fi
+done
 rm -f "${tls_render}"
 
 # Non-root policy for the three app Deployments. ${rendered} includes the

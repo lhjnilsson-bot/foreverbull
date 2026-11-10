@@ -1,0 +1,37 @@
+{{- include "foreverbull.validate" . }}
+{{- if .Values.ingress.tls }}
+{{- $entry := .Values.ingress.entryPoint | default "websecure" }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: foreverbull-grpc
+  labels:
+    {{- include "foreverbull.labels" . | nindent 4 }}
+spec:
+  secretName: foreverbull-grpc-tls
+  dnsNames:
+    - {{ .Values.ingress.host | quote }}
+  issuerRef:
+    name: {{ .Values.ingress.clusterIssuer | quote }}
+    kind: ClusterIssuer
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: foreverbull-grpc
+  labels:
+    {{- include "foreverbull.labels" . | nindent 4 }}
+spec:
+  entryPoints:
+    - {{ $entry | quote }}
+  routes:
+    - match: Host(`{{ .Values.ingress.host }}`)
+      kind: Rule
+      services:
+        # The broker listens with plaintext gRPC. h2c is HTTP/2 without TLS.
+        - name: foreverbull
+          port: {{ .Values.broker.grpcPort }}
+          scheme: h2c
+  tls:
+    secretName: foreverbull-grpc-tls
+{{- end }}

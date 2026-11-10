@@ -38,6 +38,22 @@ the public defaults with credentials.allowDefaults=true. */}}
 {{- $allMigrated := and .Values.postgres.password .Values.minio.accessKey .Values.minio.secretKey }}
 {{- $migrated := or $allMigrated $allowDefaults }}
 {{- include "foreverbull.requireCredentialMigration" (list (not (empty $existingPostgres)) (not (empty $credentialsSecret)) (not (empty $migrated))) }}
+{{- /* Remote gRPC TLS reuses the cluster's cert-manager issuer. A missing
+host or issuer would render a route that cannot get a certificate. */}}
+{{- if .Values.ingress.tls }}
+{{- $host := .Values.ingress.host | default "" | toString }}
+{{- if or (gt (len $host) 253) (not (regexMatch "^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$" $host)) (regexMatch "^[0-9.]+$" $host) }}
+{{- fail (printf "ingress.host must be a DNS name when ingress.tls is true, got %q" $host) }}
+{{- end }}
+{{- $issuer := .Values.ingress.clusterIssuer | default "" | toString }}
+{{- if or (gt (len $issuer) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $issuer)) }}
+{{- fail (printf "ingress.clusterIssuer must name a cert-manager ClusterIssuer when ingress.tls is true, got %q" $issuer) }}
+{{- end }}
+{{- $entry := .Values.ingress.entryPoint | default "websecure" | toString }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $entry) }}
+{{- fail (printf "ingress.entryPoint must be a Traefik entrypoint name when ingress.tls is true, got %q" $entry) }}
+{{- end }}
+{{- end }}
 {{- end }}
 
 {{- /* Arguments: existingPostgres hasSecret migrated. Split out so
