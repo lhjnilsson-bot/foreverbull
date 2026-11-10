@@ -241,7 +241,7 @@ Messages that start with `✖` are one line and exit with code 1. Fix the cause 
 
 | You see | Meaning | Fix |
 | --- | --- | --- |
-| Traceback ending in `StatusCode.UNAVAILABLE` … `failed to connect to all addresses` | `fbull` cannot reach the broker (`localhost:50055` on a local install, or `FOREVERBULL_BROKER_ADDRESS` / `remote.broker_address`). | `uv run fbenv status`. If the workloads are stopped, `uv run fbenv start`. For a remote cluster, check the broker address. |
+| Traceback ending in `StatusCode.UNAVAILABLE` … `failed to connect to all addresses` | `fbull` cannot reach the broker (`localhost:50055` on a local install, or `FOREVERBULL_BROKER_ADDRESS` / `remote.broker_address`). | `uv run fbenv status`. If the workloads are stopped, `uv run fbenv start`. A remote address is `<ingress.host>:443` with `ingress.tls=true`. `host:50055` is refused. `kubectl port-forward` to `localhost:50055` stays plaintext. |
 | `✖ There's no backtest named 'my-demo'. …` | The name passed to `run` does not exist. | `uv run fbull backtest list`, then use a listed name or run step 2. |
 | `✖ Backtest 'my-demo' has no data to run. …` | The backtest record exists but its data is missing. | `uv run fbull backtest delete my-demo`, then step 2 again. |
 | `✖ --start 2022-06-01 is before backtest 'my-demo' begins. …` (or `--end … is after …`) | `--start`/`--end` is outside the backtest's range. | Use dates inside the range shown by `fbull backtest get`, or leave both out. |

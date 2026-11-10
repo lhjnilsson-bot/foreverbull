@@ -178,10 +178,12 @@ uv run fbenv use remote \
   --kubeconfig /path/to/kubeconfig \
   --context my-context \
   --namespace my-namespace \
-  --broker-address host:50055
+  --broker-address grpc.example.com:443
 uv run fbenv create
 uv run fbenv start
 ```
+
+`grpc.example.com` is `ingress.host` with `ingress.tls=true`. `fbull` dials that name with TLS. `kubectl port-forward` to `localhost:50055` is the plaintext alternative.
 
 You can also `helm upgrade --install` against a kubeconfig directly. See [deploy/README.md](deploy/README.md).
 

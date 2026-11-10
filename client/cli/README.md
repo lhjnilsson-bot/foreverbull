@@ -108,7 +108,7 @@ uv run fbull token save --force
 
 `~/.foreverbull` is `0700` and `token` and `token.meta` are `0600`, owned by you. Both are written to a temporary `0600` file and renamed into place. A token file, metadata file, or directory with group or other bits, another owner, or a symlink is refused. The error names the path and the `chmod` that fixes it, not the contents. There is no keyring.
 
-The broker gRPC port is plaintext. `fbull` refuses to send a token to any host other than `127.0.0.1`, `::1`, or `localhost` (the Kind host port) with ``fbull won't send your token to <host> without encryption. Use an https:// address, or, for a local install, 127.0.0.1 or localhost.`` A remote broker needs gRPC TLS before a token can be used against it.
+Remote brokers are always reached over TLS via `ingress.host`, which requires `ingress.tls=true`. `127.0.0.1`, `::1`, and `localhost` stay plaintext.
 
 ### Sign in with the browser
 
@@ -175,7 +175,7 @@ Installs the six workloads (Postgres, NATS JetStream, Minio, Zipline, broker, Gr
 uv run fbenv status                      # host checks, then workloads
 uv run fbenv use                         # print selected cluster
 uv run fbenv use local                   # writes .foreverbull/config.yaml
-uv run fbenv use remote --kubeconfig PATH --context NAME --namespace NS --broker-address host:50055
+uv run fbenv use remote --kubeconfig PATH --context NAME --namespace NS --broker-address grpc.example.com:443
 VERSION=local uv run fbenv create        # Kind + helm upgrade --install, workloads stopped
 uv run fbenv create --start              # same install, then start
 uv run fbenv create --verbose            # on a failed image pull, also print Docker's error
