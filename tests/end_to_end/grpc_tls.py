@@ -100,10 +100,13 @@ def exercise_broker_grpc_tls() -> None:
             try:
                 _health(insecure, 5)
             except grpc.RpcError as exc:
-                if exc.code() != grpc.StatusCode.UNAVAILABLE:
-                    raise AssertionError(
-                        f"plaintext gRPC failed with {exc.code()}, want UNAVAILABLE: {exc.details()}"
-                    ) from exc
+                # Traefik answers plaintext HTTP/2 with 404. grpc reports that as UNIMPLEMENTED.
+                refused = (
+                    exc.code() == grpc.StatusCode.UNIMPLEMENTED
+                    and exc.details() == "Received http2 header with status: 404"
+                )
+                if not refused:
+                    raise AssertionError(f"plaintext gRPC failed with {exc.code()}: {exc.details()}") from exc
             else:
                 raise AssertionError("plaintext gRPC reached the broker through Traefik")
         finally:
