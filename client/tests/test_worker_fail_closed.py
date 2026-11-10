@@ -214,8 +214,6 @@ def test_pool_names_why_a_worker_could_not_start(monkeypatch, tmp_path, threaded
 
 def test_pool_keeps_a_survey_open_for_the_whole_timeout(monkeypatch, tmp_path):
     # nng closes a survey after 1s by default; a worker that answers later must still count.
-    # A survey is not queued. One sent while the worker is between recv calls is dropped,
-    # and the pool then waits out the whole survey. A second try still has to accept the late answer.
     monkeypatch.setenv("THREADED_EXECUTION", "1")
     monkeypatch.setattr(worker.models.Algorithm, "from_file_path", lambda _path: None)
 
@@ -226,16 +224,7 @@ def test_pool_keeps_a_survey_open_for_the_whole_timeout(monkeypatch, tmp_path):
     pool = worker.WorkerPool("unused", executors=1)
     with pool:
         assert pool._worker_surveyor_socket.survey_time == worker.SURVEY_TIMEOUT_MS
-        last_error: RuntimeError | None = None
-        for _attempt in range(2):
-            try:
-                pool.configure_execution(worker_pb.ExecutionConfiguration())
-            except RuntimeError as exc:
-                last_error = exc
-                continue
-            return
-        assert last_error is not None
-        raise last_error
+        pool.configure_execution(worker_pb.ExecutionConfiguration())
 
 
 def test_daemon_reports_an_error_as_type_and_message(monkeypatch, tmp_path):
