@@ -222,32 +222,35 @@ def check_plaintext_host(host: str) -> None:
     )
 
 
-def tls_channel_credentials(host: str) -> grpc.ChannelCredentials:
+def _remote_tls_error(host: str, detail: str, *, token: bool) -> InsecureTransportError:
+    """A remote dial that cannot use TLS. A token names the token. No token does not."""
+    if token:
+        return InsecureTransportError(f"fbull won't send your token to {host} without encryption. {detail}")
+    return InsecureTransportError(f"fbull is refusing to connect to remote broker {host} without TLS. {detail}")
+
+
+def tls_channel_credentials(host: str, *, token: bool) -> grpc.ChannelCredentials:
     """Trust anchors for a remote broker. A set CA path that cannot be used fails the call."""
     raw = os.environ.get(CA_ENV, "").strip()
     if not raw:
         return grpc.ssl_channel_credentials()
     path = Path(raw)
+
+    def refuse(detail: str) -> InsecureTransportError:
+        return _remote_tls_error(host, detail, token=token)
+
     try:
         pem = path.read_bytes()
     except OSError:
-        raise InsecureTransportError(
-            f"fbull won't send your token to {host} without encryption. {CA_ENV} at {path} can't be read."
-        ) from None
+        raise refuse(f"{CA_ENV} at {path} can't be read.") from None
     if not pem.strip():
-        raise InsecureTransportError(
-            f"fbull won't send your token to {host} without encryption. {CA_ENV} at {path} is empty."
-        )
+        raise refuse(f"{CA_ENV} at {path} is empty.")
     if b"-----BEGIN CERTIFICATE-----" not in pem:
-        raise InsecureTransportError(
-            f"fbull won't send your token to {host} without encryption. {CA_ENV} at {path} is not a PEM certificate."
-        )
+        raise refuse(f"{CA_ENV} at {path} is not a PEM certificate.")
     try:
         return grpc.ssl_channel_credentials(root_certificates=pem)
     except Exception as exc:
-        raise InsecureTransportError(
-            f"fbull won't send your token to {host} without encryption. {CA_ENV} at {path} is not a PEM certificate."
-        ) from exc
+        raise refuse(f"{CA_ENV} at {path} is not a PEM certificate.") from exc
 
 
 def _private_dir(directory: Path) -> None:
@@ -304,12 +307,12 @@ def broker_channel(address: str) -> grpc.Channel:
     127.0.0.1, ::1, and localhost stay plaintext. Any other host uses TLS.
     A TLS setup failure is returned. The call does not open a plaintext channel instead.
     """
-    host = _address_host(address)
+    token = resolve_token()
+    host = _address_host(address, token=bool(token))
     if _plaintext_host(host):
         channel = grpc.insecure_channel(address)
     else:
-        channel = grpc.secure_channel(address, tls_channel_credentials(host))
-    token = resolve_token()
+        channel = grpc.secure_channel(address, tls_channel_credentials(host, token=bool(token)))
     if not token:
         return channel
     return grpc.intercept_channel(channel, _MetadataInterceptor(((_AUTHORIZATION, f"Bearer {token}"),)))
@@ -321,13 +324,18 @@ _HOST_PORT = re.compile(
 )
 
 
-def _address_host(address: str) -> str:
+def _address_host(address: str, *, token: bool = False) -> str:
     """The host of a gRPC host:port address. Anything else, such as user info or a path, is refused."""
     match = _HOST_PORT.fullmatch(address.strip())
     port = match and match.group("port")
     if match is None or (port is not None and not 0 < int(port) < 65536):
+        if token:
+            raise InsecureTransportError(
+                f"fbull won't send your token to `{address}` because it isn't a host:port address. "
+                "Set FOREVERBULL_BROKER_ADDRESS or remote.broker_address to host:port, for example 127.0.0.1:50055."
+            )
         raise InsecureTransportError(
-            f"fbull won't send your token to `{address}` because it isn't a host:port address. "
+            f"fbull is refusing to connect to `{address}` without TLS because it isn't a host:port address. "
             "Set FOREVERBULL_BROKER_ADDRESS or remote.broker_address to host:port, for example 127.0.0.1:50055."
         )
     return match.group("v6") or match.group("host")

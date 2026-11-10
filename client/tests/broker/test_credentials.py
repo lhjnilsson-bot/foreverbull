@@ -341,10 +341,51 @@ def test_remote_host_without_a_token_uses_tls_and_not_plaintext(monkeypatch, tmp
     monkeypatch.delenv("FOREVERBULL_TOKEN", raising=False)
     monkeypatch.delenv(CA_ENV, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
+    seen: dict[str, object] = {}
+    issued: dict[str, object] = {}
+    real_creds = credentials.grpc.ssl_channel_credentials
+
+    def creds(*args, **kwargs):
+        issued["credentials"] = real_creds(*args, **kwargs)
+        return issued["credentials"]
+
+    def secure(address, channel_credentials, options=None, compression=None):
+        seen["address"] = address
+        seen["credentials"] = channel_credentials
+
+        class _Channel:
+            def close(self):
+                return None
+
+        return _Channel()
+
+    monkeypatch.setattr(credentials.grpc, "ssl_channel_credentials", creds)
+    monkeypatch.setattr(credentials.grpc, "secure_channel", secure)
     plaintext: list[str] = []
     monkeypatch.setattr(credentials.grpc, "insecure_channel", lambda addr: plaintext.append(addr))
     broker_channel("fb.example.com:50055").close()
     assert plaintext == []
+    assert seen["address"] == "fb.example.com:50055"
+    assert seen["credentials"] is issued["credentials"]
+
+
+def test_a_remote_failure_without_a_token_does_not_mention_the_token(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("FOREVERBULL_TOKEN", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    missing = tmp_path / "missing.pem"
+    monkeypatch.setenv(CA_ENV, str(missing))
+    with pytest.raises(InsecureTransportError) as raised:
+        broker_channel("fb.example.com:443")
+    assert str(raised.value) == (
+        "fbull is refusing to connect to remote broker fb.example.com without TLS. "
+        f"{CA_ENV} at {missing} can't be read."
+    )
+    with pytest.raises(InsecureTransportError) as raised:
+        broker_channel("not a host")
+    assert str(raised.value) == (
+        "fbull is refusing to connect to `not a host` without TLS because it isn't a host:port address. "
+        "Set FOREVERBULL_BROKER_ADDRESS or remote.broker_address to host:port, for example 127.0.0.1:50055."
+    )
 
 
 def test_broker_url_order(tmp_path: Path):
